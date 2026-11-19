@@ -241,6 +241,7 @@ private fun SetRow(item: SetWithProgress, showImages: Boolean, onClick: () -> Un
                     model = logo,
                     contentDescription = set.name,
                     contentScale = ContentScale.Fit,
+                    loading = { SetBadge(set.abbreviation.ifBlank { set.id }) },
                     error = { SetBadge(set.abbreviation.ifBlank { set.id }) },
                     modifier = Modifier.fillMaxSize(),
                 )

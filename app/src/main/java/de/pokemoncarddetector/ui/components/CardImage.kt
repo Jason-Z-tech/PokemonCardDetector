@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -106,24 +107,42 @@ private fun TextTile(item: CardItem, dim: Boolean, shape: RoundedCornerShape) {
             .border(1.dp, if (item.owned) colors.primary else colors.outlineVariant, shape)
             .alpha(if (dim) 0.7f else 1f),
     ) {
-        Column(
-            Modifier.padding(6.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(item.numberLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            Text(
-                item.card.name,
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (item.owned) {
-                Icon(Icons.Default.CheckCircle, contentDescription = "Im Besitz", tint = OwnedGreen)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (maxWidth < 90.dp) {
+                // Kleine Kachel (Listen): nur die Nummer
+                Text(
+                    item.card.localId,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(2.dp),
+                )
             } else {
-                Text(" ", fontSize = 10.sp)
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(6.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(item.numberLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(
+                        item.card.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (item.owned) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = "Im Besitz", tint = OwnedGreen)
+                    } else {
+                        Text(" ", fontSize = 10.sp)
+                    }
+                }
             }
         }
     }

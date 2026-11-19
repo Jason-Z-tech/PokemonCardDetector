@@ -17,6 +17,7 @@ import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoMode
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
@@ -56,6 +58,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeFloatingActionButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -66,6 +69,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -158,7 +162,11 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
     var openCard by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(showAlternatives, openCard) { vm.setPaused(showAlternatives || openCard != null) }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
         if (hasPermission) {
             CameraPreview(vm, controller, state.torchOn, detected = state.detection?.confident == true)
         } else {
@@ -189,8 +197,9 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.height(4.dp))
+            AutoAddChip(settings.autoAdd, onToggle = { vm.setAutoAdd(!settings.autoAdd) })
+            if (hasPermission) {
                 Surface(color = Color.Black.copy(alpha = 0.55f), contentColor = Color.White, shape = RoundedCornerShape(50)) {
                     Text(
                         state.status,
@@ -200,8 +209,6 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
-                Spacer(Modifier.weight(1f))
-                AutoAddChip(settings.autoAdd, onToggle = { vm.setAutoAdd(!settings.autoAdd) })
             }
         }
 
@@ -349,8 +356,8 @@ private fun AutoAddChip(enabled: Boolean, onToggle: () -> Unit) {
     FilterChip(
         selected = enabled,
         onClick = onToggle,
-        label = { Text(if (enabled) "Auto-Hinzufügen an" else "Auto-Hinzufügen aus") },
-        leadingIcon = { Icon(Icons.Default.AutoMode, null, Modifier.size(18.dp)) },
+        label = { Text(if (enabled) "Automatisch hinzufügen: an" else "Automatisch hinzufügen: aus", maxLines = 1) },
+        leadingIcon = { Icon(if (enabled) Icons.Default.Check else Icons.Default.AutoMode, null, Modifier.size(18.dp)) },
         colors = FilterChipDefaults.filterChipColors(
             containerColor = Color.Black.copy(alpha = 0.55f),
             labelColor = Color.White,
@@ -489,7 +496,7 @@ private fun CandidateRow(item: CardItem, settings: AppSettings, isBest: Boolean,
 }
 
 @Composable
-private fun NoPermission(onRequest: () -> Unit) {
+private fun NoPermission(onRequest: () -> Unit) = CompositionLocalProvider(LocalContentColor provides Color.White) {
     Column(
         Modifier
             .fillMaxSize()
