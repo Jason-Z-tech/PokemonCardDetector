@@ -279,6 +279,15 @@ class JapaneseMatcherTest {
             listOf("エースバーンV HP210" to 48, "016/070" to 12) to "ja:S1a-016",
             // XY3 Skaraborn-EX 001/096 gegen neo1 Skaraborn (96 Karten)
             listOf("ヘラクロスEX" to 48, "HP180" to 20, "001/096" to 12) to "ja:XY3-001",
+            // Logo nicht am Zeilenende: KP-Zahl ohne lesbares "HP", "HP" als "H" gelesen, Logo davor wiederholt
+            listOf("エースバーンVMAX 320" to 48, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX H320" to 48, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("VMAX エースバーンVMAX 320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("ヘラクロスEX 180" to 48, "001/096" to 12) to "ja:XY3-001",
+            // Logo unvollstaendig gelesen
+            listOf("エースバーンVAX" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMA" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
@@ -291,10 +300,43 @@ class JapaneseMatcherTest {
         val v = matcher.match(lines("リザードンVMAX" to 48, "HP330" to 20, "002/100" to 12))
         assertTrue(v.show(), v.best!!.card.isPlaceholder)
         assertEquals(v.show(), null, v.liveSuggestion()?.card?.id)
-        // Gegenprobe: ohne Logo bleibt das einfache Liberlo sicher
-        val plain = matcher.match(lines("エースバーン" to 48, "HP170" to 20, "017/070" to 12))
-        assertEquals(plain.show(), "ja:S6H-017", plain.best?.card?.id)
-        assertTrue(plain.show(), plain.confident)
+        // Logo in eigener Zeile oder gar nicht gelesen: die KP (320) passen nicht zu Liberlo S6H-017 (170), wohl aber
+        // zum Platzhalter mit derselben Nummer. Liberlo darf vorne stehen, aber nicht sicher sein
+        for (l in listOf(
+            listOf("エースバーン" to 48, "VMAX" to 20, "HP320" to 20, "017/070" to 12),
+            listOf("エースバーン" to 48, "HP320" to 20, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident)
+            assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == "ja:S1a-017" })
+        }
+        // Gegenprobe: ohne Logo bleibt das einfache Liberlo sicher, auch mit KP ohne "HP" in der Namenszeile
+        for (l in listOf(
+            listOf("エースバーン" to 48, "HP170" to 20, "017/070" to 12),
+            listOf("エースバーン 170" to 48, "017/070" to 12),
+            listOf("エースバーン HP170" to 48, "017/070" to 12),
+        )) {
+            val plain = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(plain.show(), "ja:S6H-017", plain.best?.card?.id)
+            assertTrue(plain.show(), plain.confident)
+        }
+    }
+
+    @Test
+    fun vmaxMitAlsVGelesenemLogoBleibtSicher() {
+        // Pikachu-VMAX S8b 046/184 (KP 310), Logo nur als "V" gelesen: "ピカチュウV" ist hier das unvollstaendige Logo
+        // der eigenen Karte, kein Widerspruch. Pikachu-V 045/184 (KP 190) daneben zieht nicht vorbei
+        for (l in listOf(
+            listOf("ピカチュウV" to 48, "HP310" to 20, "046/184" to 12),
+            listOf("ピカチュウV HP310" to 48, "S8b 046/184" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S8b-046", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: KP der V-Karte gelesen, dann ist eher die Ziffer falsch gelesen
+        val v = matcher.match(lines("ピカチュウV" to 48, "HP190" to 20, "046/184" to 12))
+        assertFalse(v.show(), v.confident && v.best?.card?.id == "ja:S8b-046")
     }
 
     @Test

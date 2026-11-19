@@ -184,8 +184,20 @@ class RecognitionRegressionTest {
             listOf("Icognito KP 80" to 48, "072/128" to 12) to "30th-072",
             listOf("Icognito KP 50" to 48, "54/123" to 12, "©2010 Pokémon" to 10) to "hgss1-54",
             listOf("Icognito KP 60" to 48, "90/214" to 12, "©2018 Pokémon" to 10) to "sm8-90",
+            // KP-Angabe falsch gelesen (echte OCR liest "KP" oft als "K"): "icognitok60" ist nicht Icognito K
+            listOf("BASIS" to 18, "Icognito K60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito K 60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "IcognitoK60" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KF60" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito xP60" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIC" to 18, "Unown H60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIC" to 18, "Unown H 60" to 48, "30/98" to 12) to "xy7-30",
+            listOf("Icognito K80" to 48, "072/128" to 12) to "30th-072",
+            listOf("Icognito K50" to 48, "54/123" to 12, "©2010 Pokémon" to 10) to "hgss1-54",
+            listOf("Icognito K60" to 48, "90/214" to 12, "©2018 Pokémon" to 10) to "sm8-90",
             // der Buchstabe selbst zaehlt weiter
             listOf("Icognito K KP 60" to 48, "68/132" to 12) to "dp3-68",
+            listOf("Icognito K K60" to 48, "68/132" to 12) to "dp3-68",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
@@ -195,6 +207,60 @@ class RecognitionRegressionTest {
         // Gegenprobe: ein echter laengerer Name vor der KP-Angabe widerspricht weiter ("Mewtu" ist nicht Mew-ex 151/165)
         val m = matcher.match(lines("Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
         assertFalse(m.show(), m.confident)
+        // ... ebenso ein Buchstabe ohne Zahl dahinter: "Icognito K" ist nicht das einfache Icognito 30/98
+        val k = matcher.match(lines("BASIS" to 18, "Icognito K" to 48, "30/98" to 12, "©2015 Pokémon" to 10))
+        assertFalse(k.show(), k.confident)
+    }
+
+    @Test
+    fun logoNurAlsVGelesenBleibtSicher() {
+        // VMAX/VSTAR-Logo nur als "V" gelesen: "Olangaar V" steckt in "Olangaar VMAX", das ist kein anderer Name.
+        // Nummer, Gesamtzahl und KP passen, die V-Karte daneben (eine Ziffer weniger) zieht nicht vorbei
+        val cases = listOf(
+            listOf("VMAX" to 18, "OlangaarV 330" to 48, "115/189" to 12) to "swsh3-115",
+            listOf("VMAX" to 18, "PikachuV KP 310" to 48, "044/185" to 12) to "swsh4-44",
+            listOf("PikachuV KP 310" to 48, "044/185" to 12, "©2020 Pokémon" to 10) to "swsh4-44",
+            listOf("VMAX" to 18, "GlaziolaV KP 310" to 48, "041/203" to 12) to "swsh7-41",
+            listOf("VSTAR" to 18, "Icognito V KP 250" to 48, "066/195" to 12) to "swsh12-066",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: die KP gehoeren zur V-Karte (Olangaar-V 220 statt Olangaar-VMAX 330), dann ist eher die Nummer
+        // falsch gelesen: weder die VMAX-Karte sicher noch an erster Stelle
+        val v = matcher.match(lines("Olangaar V KP 220" to 48, "115/189" to 12))
+        assertEquals(v.show(), "swsh3-114", v.best?.card?.id)
+        assertFalse(v.show(), v.confident)
+        val p = matcher.match(lines("Pikachu V KP 190" to 48, "044/185" to 12, "©2020 Pokémon" to 10))
+        assertEquals(p.show(), "swsh4-43", p.best?.card?.id)
+        assertFalse(p.show(), p.confident)
+    }
+
+    @Test
+    fun stufeAlterKartenIstKeinLogo() {
+        // "Torchic LV.7" liest die OCR als "Torchicv.7": das "V" vor der Stufe ist kein V-Logo (echte OCR-Ausgabe)
+        val cases = listOf(
+            listOf("HP50" to 18, "Torchicv.7" to 44, "BASIC" to 22, "Peck" to 30, "10" to 30, "89/106" to 12) to "dp4-89",
+            listOf("Torchic V7 HP50" to 48, "89/106" to 12) to "dp4-89",
+            listOf("Diglett V13 HP50" to 48, "72/127" to 12) to "pl1-72",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Ein Wort mit "V" am Anfang ist ebenfalls kein Logo ("Glurak V" ist ein Katalogname)
+        val w = matcher.match(lines("PHASE 2" to 18, "Glurak verwandelt" to 48, "025/185" to 12, "©2020 Pokémon" to 10))
+        assertEquals(w.show(), "swsh4-25", w.best?.card?.id)
+        assertTrue(w.show(), w.confident)
+        // Gegenprobe: ein echtes Logo samt KP widerspricht der einfachen Karte mit derselben Nummer, auch mit
+        // falsch gelesener KP-Angabe ("K220") direkt dahinter
+        for (name in listOf("Glurak ex KP 170", "Glurak V K220", "GlurakVK220")) {
+            val r = matcher.match(lines("PHASE 2" to 18, name to 48, "025/185" to 12, "©2020 Pokémon" to 10))
+            assertFalse(r.show(), r.confident)
+        }
     }
 
     @Test

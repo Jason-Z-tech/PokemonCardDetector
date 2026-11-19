@@ -157,9 +157,15 @@ class CardMatcher(private val index: CatalogIndex) {
         const val NEUTRAL = 0.5
         /**
          * KP-Angabe in einer normalisierten Zeile: "kp60", "hp330", "120hp", auch ohne lesbare Zahl am Zeilenende
-         * ("kp", "kp6o"). Kein Katalogname enthaelt so etwas.
+         * ("kp", "kp6o"). Kein Katalogname enthaelt so etwas. Die Zahl vor "hp" nur, wenn keine dahinter steht:
+         * in "diglettv13hp50" (Diglett LV.13 HP 50) ist 13 die Stufe.
          */
-        val HP_MARK = Regex("(?:kp|hp)(?:[0-9]{2,3}|[0-9oqdilsz]{0,3}$)|[0-9]{2,3}(?:kp|hp)")
+        val HP_MARK = Regex("(?:kp|hp)(?:[0-9]{2,3}|[0-9oqdilsz]{0,3}$)|[0-9]{2,3}(?:kp|hp)(?![0-9])")
+        /**
+         * Typische Fehllesungen der KP-Angabe direkt vor der Zahl: "K60", "H60", "xP60", "KF60". Nicht in [HP_MARK],
+         * weil ein einzelner Buchstabe vor Ziffern auch das Namensende sein kann ("Glurak BREAK 170"), siehe [hpLetter].
+         */
+        val HP_MISREAD = Regex("(?:kp|hp|xp|kf|[khp])[0-9]{2,3}")
     }
 
     fun match(lines: List<OcrLine>): MatchResult = match(CardTextParser.parse(lines))
@@ -224,7 +230,7 @@ class CardMatcher(private val index: CatalogIndex) {
                     // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch gelesen)
                     if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
                     // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
-                    if (bestNumberCandidate != null && bestNumberName >= 0.8 && nested(card, bestNumberCandidate.card)) continue
+                    if (bestNumberCandidate != null && bestNumberName >= 0.8 && logoUnread(card, bestNumberCandidate.card, parsed)) continue
                     val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) } ||
                         parsed.numbers.any { it.total == null && card.prefix.isNotEmpty() && it.key.takeWhile(Char::isLetter) == card.prefix }
                     val c = score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds)
@@ -268,7 +274,10 @@ class CardMatcher(private val index: CatalogIndex) {
         )
         val best = sorted.first()
         val second = sorted.getOrNull(1)
-        val confident = isConfident(best, second, sorted, parsed)
+        // Gelesene KP passen nicht zur Karte, ein Platzhalter mit derselben Nummer schon (Name unbekannt): dann ist die
+        // Karte vermutlich die des Platzhalters und ihr Logo nicht oder in eigener Zeile gelesen ("エースバーン" + "VMAX")
+        val hpContradicts = parsed.hp != null && best.card.hp > 0 && parsed.hp != best.card.hp
+        val confident = isConfident(best, second, sorted, parsed) && !(placeholderScore != null && hpContradicts)
         return MatchResult(best, sorted.drop(1).take(MAX_ALTERNATIVES), confident, parsed)
     }
 
@@ -282,12 +291,13 @@ class CardMatcher(private val index: CatalogIndex) {
 
     private fun nameScore(parsed: ParsedCardText, card: IndexCard, contained: ContainedNames): Double {
         var best = 0.0
+        val own = listOf(card.nameNorm, card.nameEnNorm, card.aliasNameNorm).filter { it.isNotEmpty() }
         for (line in parsed.nameLines) {
-            var s = similarity(line, card.nameNorm, contained)
-            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, similarity(line, card.nameEnNorm, contained))
-            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * similarity(line, card.baseNorm, contained))
-            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * similarity(line, card.baseEnNorm, contained))
-            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, similarity(line, card.aliasNameNorm, contained))
+            var s = similarity(line, card.nameNorm, own, contained)
+            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, similarity(line, card.nameEnNorm, own, contained))
+            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * similarity(line, card.baseNorm, own, contained))
+            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * similarity(line, card.baseEnNorm, own, contained))
+            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, similarity(line, card.aliasNameNorm, own, contained))
             if (s > best) best = s
             if (best >= 1.0) break
         }
@@ -299,31 +309,84 @@ class CardMatcher(private val index: CatalogIndex) {
      * dann ist die Zeile dieser andere Name und nicht [name] mit Zusatztext (wie "Glurak" in "Glurak KP 170").
      * Ein anderer Name ist
      * - ein laengerer Katalogname, der [name] enthaelt ("リザード" in "リザードンEX", "Mew" in "Mewtu KP 130"), oder
-     * - [name] samt einem Logo, das nicht zu [name] gehoert ("エースバーン" oder "エースバーンV" in "エースバーンVMAX").
+     * - [name] samt einem Logo, das nicht zu [name] gehoert ("エースバーン" oder "エースバーンV" in "エースバーンVMAX",
+     *   auch mit Zahl dahinter oder unvollstaendig gelesen: "エースバーンVMAX 320", "エースバーンVAX").
      *   Das gilt auch, wenn es diesen Namen im Katalog nicht gibt (Sets ohne Kartenliste).
      * Dann spricht die Zeile nicht fuer die Karte: [NEUTRAL], also keine Namenspunkte.
-     * Die KP-Angabe zaehlt nicht zum Namen: "Icognito KP 60" ist nicht "Icognito K".
+     * Kein anderer Name ist ein Teil des eigenen Kartennamens [own]: "Pikachu V" in "Pikachu VMAX" ist dessen
+     * unvollstaendig gelesenes Logo, kein Widerspruch.
+     * Die KP-Angabe zaehlt nicht zum Namen: "Icognito KP 60" ist nicht "Icognito K", auch nicht "Icognito K60".
      * Nur wenn der andere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
      * ("Wenn du M-Simsala-EX ... spielst" auf Simsala-EX) oder bildet zufaellig einen Namen ("Icognito Schrift").
      */
-    private fun similarity(line: String, name: String, contained: ContainedNames): Double {
+    private fun similarity(line: String, name: String, own: List<String>, contained: ContainedNames): Double {
         val s = TextNorm.nameSimilarity(line, name)
         if (s <= NEUTRAL || name.isEmpty() || !line.contains(name)) return s
         val core = nameParts(line).firstOrNull { it.contains(name) } ?: return s
         if (name.length >= core.length) return s
-        fun spansLine(start: Int, end: Int) = (end - start) * 3 >= line.length
-        val longer = contained.of(core).any { it.length > name.length && spansLine(0, it.length) && it.contains(name) }
-        // Logo am Ende, [name] endet an dessen Anfang oder darin ("…v" in "…vmax"), aber nicht am Ende
-        val logo = IndexCard.LOGOS_NORM.firstOrNull { core.endsWith(it) }
-        val logoStart = core.length - (logo?.length ?: 0)
-        val withLogo = logo != null && (logoStart until core.length).any { end ->
-            val start = end - name.length
-            start in 0 until logoStart && core.startsWith(name, start) && spansLine(start, core.length)
+        fun spansLine(length: Int) = length * 3 >= line.length
+        fun foreign(other: String) = own.none { it.contains(other) }
+        // Namen, die nur ein Logo laenger sind ("Glurak V" in "Glurak von"), prueft genauer withLogo
+        fun logoLonger(other: String) = other.startsWith(name) && other.substring(name.length) in IndexCard.LOGOS_NORM
+        val longer = contained.of(core).any {
+            it.length > name.length && spansLine(it.length) && it.contains(name) && foreign(it) &&
+                !logoLonger(it) && !hpLetter(core, it, name)
+        }
+        // Logo hinter [name] (beginnt direkt danach oder schon darin, "…v" in "…vmax"), auch mit Zahl dahinter
+        val withLogo = !longer && occurrences(core, name).any { start ->
+            val end = start + name.length
+            (start + 1..end).any { p ->
+                val runEnd = latinRunEnd(core, p)
+                runEnd > end && readsAsLogo(core.substring(p, runEnd)) && !levelMark(core, p, runEnd) &&
+                    spansLine(runEnd - start) && foreign(core.substring(start, runEnd))
+            }
         }
         if (!longer && !withLogo) return s
         contained.contradiction = true
         return NEUTRAL
     }
+
+    private fun occurrences(s: String, part: String): Sequence<Int> =
+        generateSequence(s.indexOf(part).takeIf { it >= 0 }) { i -> s.indexOf(part, i + 1).takeIf { it >= 0 } }
+
+    /**
+     * Ende der lateinischen Buchstabenfolge ab [from] ("vmax" in "エースバーンvmax320"). Buchstaben einer falsch
+     * gelesenen KP-Angabe direkt vor der Zahl gehoeren nicht dazu: "vmaxh320" -> "vmax", "vk210" -> "v".
+     */
+    private fun latinRunEnd(s: String, from: Int): Int {
+        var i = from
+        while (i < s.length && s[i] in 'a'..'z') i++
+        for (q in from + 1 until i) {
+            val hp = HP_MISREAD.find(s, q) ?: break
+            if (hp.range.first == q && hp.range.last >= i) return q
+        }
+        return i
+    }
+
+    /**
+     * Buchstaben, die als Logo gelesen sind: genau ein Logo ("v", "ex", "vmax"), lange Logos auch mit einem
+     * Lesefehler ("vax", "vma" fuer VMAX). Woerter wie "von" oder "verwandelt" nicht.
+     */
+    private fun readsAsLogo(letters: String): Boolean =
+        IndexCard.LOGOS_NORM.any { it == letters || (it.length >= 4 && TextNorm.levenshtein(letters, it) <= 1) }
+
+    /**
+     * "V" vor einer Zahl, die keine KP einer V-Karte sein kann (unter 100 oder ueber 400), ist die Stufe aelterer
+     * Karten mit ungelesenem "L": "Torchic LV.7 HP 50" als "torchicv7hp50", "drifblimv33", auch "torchicv750".
+     */
+    private fun levelMark(core: String, runStart: Int, runEnd: Int): Boolean {
+        if (runEnd - runStart != 1 || core[runStart] != 'v') return false
+        val digits = core.substring(runEnd).takeWhile { it in '0'..'9' }.take(4)
+        return digits.isNotEmpty() && digits.toInt() !in 100..400
+    }
+
+    /**
+     * [other] ist [name] plus ein Buchstabe, der in [core] zur falsch gelesenen KP-Angabe gehoert:
+     * "Icognito K60" ist "Icognito KP 60", nicht Icognito K ([HP_MISREAD]).
+     */
+    private fun hpLetter(core: String, other: String, name: String): Boolean =
+        other.length == name.length + 1 && other.startsWith(name) &&
+            occurrences(core, other).any { i -> HP_MISREAD.find(core, i + name.length)?.range?.first == i + name.length }
 
     /** Teile einer normalisierten Zeile ohne die KP-Angabe ("glurakkp170" -> "glurak"). */
     private fun nameParts(line: String): List<String> = line.split(HP_MARK)
@@ -387,7 +450,7 @@ class CardMatcher(private val index: CatalogIndex) {
         val best = HashMap<String, Double>()
         for (line in lines) {
             for (name in index.nameCandidates(line)) {
-                val s = similarity(line, name, contained)
+                val s = similarity(line, name, listOf(name), contained)
                 if (s >= 0.82 && s > (best[name] ?: 0.0)) best[name] = s
             }
         }
@@ -406,9 +469,16 @@ class CardMatcher(private val index: CatalogIndex) {
         return n(shorter.nameNorm, longer.nameNorm) || n(shorter.nameEnNorm, longer.nameEnNorm)
     }
 
+    /**
+     * [nested], ausser die gelesenen KP sprechen fuer [shorter]: "Mewtu V KP 220" mit 031/078 ist Mewtu-V (KP 220)
+     * mit falsch gelesener Ziffer, nicht Mewtu-VSTAR (KP 280) mit unvollstaendig gelesenem Logo.
+     */
+    private fun logoUnread(shorter: IndexCard, longer: IndexCard, parsed: ParsedCardText): Boolean =
+        nested(shorter, longer) && !(parsed.hp != null && parsed.hp == shorter.hp && longer.hp > 0 && parsed.hp != longer.hp)
+
     private fun isConfident(best: MatchCandidate, second: MatchCandidate?, all: List<MatchCandidate>, parsed: ParsedCardText): Boolean {
         // Eine andere Karte passt per Name klar besser -> Nummer vermutlich falsch gelesen
-        if (all.any { it !== best && it.nameScore >= 0.8 && it.nameScore > best.nameScore + 0.02 && !nested(it.card, best.card) }) return false
+        if (all.any { it !== best && it.nameScore >= 0.8 && it.nameScore > best.nameScore + 0.02 && !logoUnread(it.card, best.card, parsed) }) return false
         // Ohne lesbaren Namen nie sicher: eine falsch gelesene Ziffer ergibt sonst eine andere, gueltige Karte
         if (best.nameScore < 0.8) return false
         // Copyright-Jahr deutlich nach Erscheinen des Sets -> Nachdruck (z.B. Celebrations Classic Collection)
