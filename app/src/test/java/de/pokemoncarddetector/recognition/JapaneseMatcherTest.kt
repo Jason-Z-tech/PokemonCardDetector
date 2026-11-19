@@ -285,6 +285,8 @@ class JapaneseMatcherTest {
             listOf("エースバーンVMAX320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
             listOf("VMAX エースバーンVMAX 320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
             listOf("ヘラクロスEX 180" to 48, "001/096" to 12) to "ja:XY3-001",
+            // "HP" als "H" gelesen, die Zahl in einem eigenen Feld: "vmaxh" ist weiter das VMAX-Logo
+            listOf("エースバーンVMAXH" to 48, "320" to 20, "017/070" to 12) to "ja:S1a-017",
             // Logo unvollstaendig gelesen
             listOf("エースバーンVAX" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
             listOf("エースバーンVMA" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
@@ -337,6 +339,53 @@ class JapaneseMatcherTest {
         // Gegenprobe: KP der V-Karte gelesen, dann ist eher die Ziffer falsch gelesen
         val v = matcher.match(lines("ピカチュウV" to 48, "HP190" to 20, "046/184" to 12))
         assertFalse(v.show(), v.confident && v.best?.card?.id == "ja:S8b-046")
+    }
+
+    @Test
+    fun eigenesLogoMitStoerbuchstabeBleibtSicher() {
+        // "HP" als "H" gelesen, die Zahl in einem eigenen Feld oder mit O statt 0: "ヒカチュウvmaxh" ist das eigene
+        // VMAX-Logo mit einem Lesefehler, kein anderes Logo. Weder Mew-VMAX (S8b-280) noch ein Platzhalter zieht vorbei
+        for (l in listOf(
+            listOf("ピカチュウVMAXH" to 48, "310" to 20, "046/184" to 12),
+            listOf("ピカチュウVMAX H31O" to 48, "046/184" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S8b-046", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+    }
+
+    @Test
+    fun gelesenesKuerzelDesPlatzhaltersWidersprichtAnderemSet() {
+        // S1a Liberlo-VMAX 017/070 und Liberlo-V 016/070 (S1a ohne Kartenliste), Logo nicht oder in eigener Zeile
+        // gelesen. Das Kuerzel "S1a" passt zum Platzhalter, nicht zum einfachen Liberlo S6H-017 (gleiche Gesamtzahl):
+        // der Platzhalter steht vorne, Liberlo bleibt nur Auswahl
+        for ((l, id) in listOf(
+            listOf("エースバーン" to 48, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "VMAX" to 20, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "HP320" to 20, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "S1a 016/070" to 12) to "ja:S1a-016",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            assertTrue(r.show(), r.alternatives.any { it.card.id == "ja:S6H-017" })
+        }
+        // Ohne Kuerzel, das Logo in eigener Zeile: es passt nicht zu Liberlo, wohl aber zum Platzhalter. Nicht sicher
+        val logo = matcher.match(lines("エースバーン" to 48, "VMAX" to 20, "017/070" to 12))
+        assertFalse(logo.show(), logo.confident)
+        assertTrue(logo.show(), (logo.alternatives + logo.best!!).any { it.card.id == "ja:S1a-017" })
+        // Gegenprobe: Kuerzel S6H gelesen, oder nichts, was Liberlo widerspricht: sicher
+        for (l in listOf(
+            listOf("エースバーン" to 48, "D S6H 017/070 R" to 12),
+            listOf("エースバーン" to 48, "HP170" to 20, "S6H 017/070" to 12),
+            listOf("エースバーン" to 48, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S6H-017", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
     }
 
     @Test

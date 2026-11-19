@@ -195,9 +195,24 @@ class RecognitionRegressionTest {
             listOf("Icognito K80" to 48, "072/128" to 12) to "30th-072",
             listOf("Icognito K50" to 48, "54/123" to 12, "©2010 Pokémon" to 10) to "hgss1-54",
             listOf("Icognito K60" to 48, "90/214" to 12, "©2018 Pokémon" to 10) to "sm8-90",
+            // weitere Lesefehler: 0 als O, P als R/F, G statt 6, Typ-Symbol hinter der Zahl
+            listOf("BASIS" to 18, "Icognito K6O" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito K 6O" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KR60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KP 6O W" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KPG0" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIC" to 18, "Unown HF60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIC" to 18, "Unown H6O" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIC" to 18, "Unown HP 6O W" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("Icognito KP 6O W" to 48, "90/214" to 12, "©2018 Pokémon" to 10) to "sm8-90",
+            listOf("Icognito K6O" to 48, "072/128" to 12) to "30th-072",
+            // "Icognito !" heisst normalisiert "icognito": nicht "Icognito W" aus demselben Set
+            listOf("Icognito ! KP 6O W" to 48, "42/146" to 12) to "dp6-42",
             // der Buchstabe selbst zaehlt weiter
             listOf("Icognito K KP 60" to 48, "68/132" to 12) to "dp3-68",
             listOf("Icognito K K60" to 48, "68/132" to 12) to "dp3-68",
+            listOf("Icognito K K6O" to 48, "68/132" to 12) to "dp3-68",
+            listOf("Icognito K KP 6O W" to 48, "68/132" to 12) to "dp3-68",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
@@ -236,6 +251,38 @@ class RecognitionRegressionTest {
         val p = matcher.match(lines("Pikachu V KP 190" to 48, "044/185" to 12, "©2020 Pokémon" to 10))
         assertEquals(p.show(), "swsh4-43", p.best?.card?.id)
         assertFalse(p.show(), p.confident)
+    }
+
+    @Test
+    fun eigenesLogoMitStoerbuchstabeWidersprichtNicht() {
+        // Hinter Name oder Logo steht ein Buchstabe der KP-Angabe, die Zahl fehlt oder steht in einem eigenen Feld.
+        // "vmaxk" ist das eigene VMAX-Logo mit einem Lesefehler, "abrak"/"lombrek" enthalten kein Logo (nicht "brak"
+        // fuer BREAK): die Karten bleiben sicher wie ohne den Buchstaben
+        val cases = listOf(
+            listOf("Morpeko VMAX K" to 48, "300" to 20, "038/072" to 12, "©2021 Pokémon" to 10) to "swsh4.5-38",
+            listOf("Morpeko VMAX K3OO" to 48, "038/072" to 12, "©2021 Pokémon" to 10) to "swsh4.5-38",
+            listOf("Pikachu VMAXH" to 48, "310" to 20, "044/185" to 12, "©2020 Pokémon" to 10) to "swsh4-44",
+            listOf("Regigigas VSTAR K3OO" to 48, "114/159" to 12, "©2023 Pokémon" to 10) to "swsh12.5-114",
+            listOf("BASIS" to 18, "Abra K" to 48, "50" to 20, "063/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-063",
+            listOf("BASIS" to 18, "Abra K5O" to 48, "063/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-063",
+            listOf("PHASE 1" to 18, "Kadabra K8O" to 48, "064/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-064",
+            listOf("PHASE 1" to 18, "Lombre K8O" to 48, "21/30" to 12, "©2015 Pokémon" to 10) to "tk-xy-latia-21",
+            listOf("Arcanine BREAK K" to 48, "160" to 20, "XY180" to 12, "©2016 Pokémon" to 10) to "xyp-XY180",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: das VMAX-Logo widerspricht weiter der V-Karte mit der gelesenen Nummer
+        for ((l, id) in listOf(
+            listOf("Morpeko VMAX K" to 48, "300" to 20, "037/072" to 12, "©2021 Pokémon" to 10) to "swsh4.5-37",
+            listOf("Pikachu VMAX K" to 48, "310" to 20, "043/185" to 12, "©2020 Pokémon" to 10) to "swsh4-43",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident && r.best?.card?.id == id)
+            assertTrue(r.show(), r.best?.card?.name?.endsWith("VMAX") == true)
+        }
     }
 
     @Test

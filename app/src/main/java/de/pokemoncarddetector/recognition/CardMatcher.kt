@@ -156,16 +156,22 @@ class CardMatcher(private val index: CatalogIndex) {
         /** Namensaehnlichkeit ohne Aussage (keine Namenspunkte), siehe [score] */
         const val NEUTRAL = 0.5
         /**
-         * KP-Angabe in einer normalisierten Zeile: "kp60", "hp330", "120hp", auch ohne lesbare Zahl am Zeilenende
-         * ("kp", "kp6o"). Kein Katalogname enthaelt so etwas. Die Zahl vor "hp" nur, wenn keine dahinter steht:
-         * in "diglettv13hp50" (Diglett LV.13 HP 50) ist 13 die Stufe.
+         * KP-Zahl, wie die OCR sie liest: zwei bis drei Zeichen, Ziffern oder ziffernaehnliche Buchstaben ("6o",
+         * "g0", "31o"), davon eines der ersten beiden eine echte Ziffer. Danach darf ein Typ-Symbol folgen ("kp6ow").
          */
-        val HP_MARK = Regex("(?:kp|hp)(?:[0-9]{2,3}|[0-9oqdilsz]{0,3}$)|[0-9]{2,3}(?:kp|hp)(?![0-9])")
+        private const val HP_NUMBER = "(?=[oqdilszgb]?[0-9])[0-9oqdilszgb]{2,3}"
         /**
-         * Typische Fehllesungen der KP-Angabe direkt vor der Zahl: "K60", "H60", "xP60", "KF60". Nicht in [HP_MARK],
-         * weil ein einzelner Buchstabe vor Ziffern auch das Namensende sein kann ("Glurak BREAK 170"), siehe [hpLetter].
+         * KP-Angabe in einer normalisierten Zeile: "kp60", "hp330", "kp6ow", "120hp", auch ohne lesbare Zahl am
+         * Zeilenende ("kp", "kpoo"). Kein Katalogname enthaelt so etwas. Die Zahl vor "hp" nur, wenn keine dahinter
+         * steht: in "diglettv13hp50" (Diglett LV.13 HP 50) ist 13 die Stufe.
          */
-        val HP_MISREAD = Regex("(?:kp|hp|xp|kf|[khp])[0-9]{2,3}")
+        val HP_MARK = Regex("(?:kp|hp)(?:$HP_NUMBER|[0-9oqdilsz]{0,3}$)|[0-9]{2,3}(?:kp|hp)(?![0-9])")
+        /**
+         * Typische Fehllesungen der KP-Angabe direkt vor der Zahl: "K60", "H6O", "xP60", "KF60", "KR60", "HF60".
+         * Nicht in [HP_MARK], weil ein einzelner Buchstabe vor Ziffern auch das Namensende sein kann
+         * ("Glurak BREAK 170"), siehe [hpLetter].
+         */
+        val HP_MISREAD = Regex("(?:kp|hp|xp|kf|kr|hf|[khp])$HP_NUMBER")
     }
 
     fun match(lines: List<OcrLine>): MatchResult = match(CardTextParser.parse(lines))
@@ -206,12 +212,16 @@ class CardMatcher(private val index: CatalogIndex) {
         // Platzhalter (Set ohne Kartenliste) mit genau passender Nummer + Gesamtzahl: sein Name ist unbekannt und
         // kann zur Zeile passen. Karten mit anderer Nummer sind dann nur eine Vermutung ("Nummer falsch gelesen")
         // und duerfen nicht vorbeiziehen, ausser mit exakt gelesenem Namen oder einer Ziffer Abstand.
-        // Ein gelesenes Kuerzel eines anderen Sets widerspricht dem Platzhalter, dann gilt das nicht.
+        // Ein gelesenes Kuerzel eines anderen Sets widerspricht dem Platzhalter, dann gilt das nicht. Passt das
+        // gelesene Kuerzel dagegen zum Platzhalter, widerspricht es jeder Karte aus einem anderen Set, auch mit
+        // exakt gelesenem Namen ("エースバーン" + "S1a 017/070" ist Liberlo-VMAX mit ungelesenem Logo, nicht S6H-017).
         val placeholderScore = candidates.values
             .filter { it.numberMatched && it.totalMatched && it.card.isPlaceholder && (codeSetIds.isEmpty() || it.codeMatched) }
             .maxOfOrNull { it.score }
-        fun belowPlaceholder(c: MatchCandidate) =
-            placeholderScore != null && !c.numberMatched && !closeNumber(c.card) && !readExactly(parsed, c.card)
+        fun belowPlaceholder(c: MatchCandidate) = placeholderScore != null && (
+            (codeSetIds.isNotEmpty() && !c.codeMatched) ||
+                (!c.numberMatched && !closeNumber(c.card) && !readExactly(parsed, c.card))
+            )
 
         // 2) Nummer evtl. falsch gelesen: Karten aus Sets mit passender Gesamtzahl/Kuerzel per Name suchen
         val setsFromTotals = parsed.numbers.mapNotNull { it.total }.toSet()
@@ -274,10 +284,15 @@ class CardMatcher(private val index: CatalogIndex) {
         )
         val best = sorted.first()
         val second = sorted.getOrNull(1)
-        // Gelesene KP passen nicht zur Karte, ein Platzhalter mit derselben Nummer schon (Name unbekannt): dann ist die
-        // Karte vermutlich die des Platzhalters und ihr Logo nicht oder in eigener Zeile gelesen ("エースバーン" + "VMAX")
+        // Gelesene KP oder ein Logo in eigener Zeile passen nicht zur Karte, ein Platzhalter mit derselben Nummer schon
+        // (Name unbekannt): dann ist die Karte vermutlich die des Platzhalters und ihr Logo nicht oder in eigener Zeile
+        // gelesen ("エースバーン" + "VMAX")
         val hpContradicts = parsed.hp != null && best.card.hp > 0 && parsed.hp != best.card.hp
-        val confident = isConfident(best, second, sorted, parsed) && !(placeholderScore != null && hpContradicts)
+        val logoContradicts = parsed.nameLines.any { line ->
+            line in IndexCard.LOGOS_NORM && !best.card.nameNorm.endsWith(line) && !best.card.nameEnNorm.endsWith(line)
+        }
+        val confident = isConfident(best, second, sorted, parsed) &&
+            !(placeholderScore != null && (hpContradicts || logoContradicts))
         return MatchResult(best, sorted.drop(1).take(MAX_ALTERNATIVES), confident, parsed)
     }
 
@@ -332,15 +347,20 @@ class CardMatcher(private val index: CatalogIndex) {
             it.length > name.length && spansLine(it.length) && it.contains(name) && foreign(it) &&
                 !logoLonger(it) && !hpLetter(core, it, name)
         }
-        // Logo hinter [name] (beginnt direkt danach oder schon darin, "…v" in "…vmax"), auch mit Zahl dahinter
-        val withLogo = !longer && occurrences(core, name).any { start ->
+        // Fremdes Logo ab Position p hinter [name] an Position start, auch mit Zahl dahinter. Es beginnt direkt nach
+        // [name], oder [name] endet selbst auf ein Logo und die Zeile verlaengert es ("pikachuv" in "pikachuvmax").
+        // Fremd ist der gelesene Name mit dem Logo, als das die Buchstaben gelesen sind: "morpekovmaxk" ist
+        // Morpeko VMAX (Logo mit Lesefehler), "abrak" enthaelt kein Logo (nicht "brak" fuer BREAK)
+        fun foreignLogo(start: Int, p: Int): Boolean {
             val end = start + name.length
-            (start + 1..end).any { p ->
-                val runEnd = latinRunEnd(core, p)
-                runEnd > end && readsAsLogo(core.substring(p, runEnd)) && !levelMark(core, p, runEnd) &&
-                    spansLine(runEnd - start) && foreign(core.substring(start, runEnd))
-            }
+            val ownLogo = core.substring(p, end)
+            if (p < end && ownLogo !in IndexCard.LOGOS_NORM) return false
+            val runEnd = latinRunEnd(core, p)
+            if (runEnd <= end || levelMark(core, p, runEnd) || !spansLine(runEnd - start)) return false
+            val logos = logosReadAs(core.substring(p, runEnd)).filter { it.length > ownLogo.length && it.startsWith(ownLogo) }
+            return logos.isNotEmpty() && logos.all { foreign(core.substring(start, p) + it) }
         }
+        val withLogo = !longer && occurrences(core, name).any { start -> (start + 1..start + name.length).any { foreignLogo(start, it) } }
         if (!longer && !withLogo) return s
         contained.contradiction = true
         return NEUTRAL
@@ -364,11 +384,13 @@ class CardMatcher(private val index: CatalogIndex) {
     }
 
     /**
-     * Buchstaben, die als Logo gelesen sind: genau ein Logo ("v", "ex", "vmax"), lange Logos auch mit einem
-     * Lesefehler ("vax", "vma" fuer VMAX). Woerter wie "von" oder "verwandelt" nicht.
+     * Die Logos, als die [letters] gelesen sind: genau ein Logo ("v", "ex", "vmax"), sonst lange Logos mit einem
+     * Lesefehler ("vax", "vma", "vmaxk" fuer VMAX). Woerter wie "von" oder "verwandelt" sind kein Logo.
      */
-    private fun readsAsLogo(letters: String): Boolean =
-        IndexCard.LOGOS_NORM.any { it == letters || (it.length >= 4 && TextNorm.levenshtein(letters, it) <= 1) }
+    private fun logosReadAs(letters: String): List<String> =
+        IndexCard.LOGOS_NORM.filter { it == letters }.ifEmpty {
+            IndexCard.LOGOS_NORM.filter { it.length >= 4 && TextNorm.levenshtein(letters, it) <= 1 }
+        }
 
     /**
      * "V" vor einer Zahl, die keine KP einer V-Karte sein kann (unter 100 oder ueber 400), ist die Stufe aelterer
