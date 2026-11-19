@@ -328,15 +328,24 @@ class RecognitionRegressionTest {
             listOf("Icognito ! LV.35" to 48, "KP 50" to 14, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
             listOf("Icognito ! wv.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
             listOf("BASIC" to 18, "Unown ! LV.35 HP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            // V der Stufe nicht gelesen (echte OCR: "Gastly w.12", "Drifblim w.33"): "icognitow35" ist nicht
+            // Icognito W (dp6-80, dasselbe Set), "icognitol35" nicht Icognito L
+            listOf("Icognito !w.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("Icognito ?w.35 KP 70" to 48, "82/146" to 12, "©2008 Pokémon" to 10) to "dp6-82",
+            listOf("Icognito ! w.35" to 48, "KP 50" to 14, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("Icognito ! l.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
             assertEquals(r.show(), id, r.best?.card?.id)
             assertTrue(r.show(), r.confident)
         }
-        // Gegenprobe: der Buchstabe L vor der Stufe ist gelesen, das ist nicht das einfache "Icognito !"
-        val l = matcher.match(lines("Icognito L LV.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10))
-        assertFalse(l.show(), l.confident && l.best?.card?.id == "dp6-42")
+        // Gegenprobe: der Buchstabe L vor der Stufe ist gelesen, das ist nicht das einfache "Icognito !". Ebenso der
+        // Buchstabe W vor einer Stufe ohne V ("Icognito W w.35" mit falsch gelesener Nummer)
+        for (name in listOf("Icognito L LV.35 KP 50", "Icognito W w.35 KP 90", "Icognito W LV.35 KP 90")) {
+            val l = matcher.match(lines(name to 48, "42/146" to 12, "©2008 Pokémon" to 10))
+            assertFalse(l.show(), l.confident && l.best?.card?.id == "dp6-42")
+        }
     }
 
     @Test
@@ -382,6 +391,49 @@ class RecognitionRegressionTest {
             assertEquals(d.show(), "pop5-13", d.best?.card?.id)
             assertTrue(d.show(), d.confident)
         }
+    }
+
+    @Test
+    fun abgeschnitteneStufeIstKeinTeilDesNamens() {
+        // Stufe vor dem Namen abgeschnitten oder mit zwei Lesefehlern ("2's)" ist eine echte Tesseract-Lesung von
+        // "BASIS)"): ihr letztes "s" bildet mit dem Namen weiter "spikachu". S Pikachu gibt es aber nur als 24/53 mit
+        // KP 50 (basep-24) und als dessen Nachdruck mit der Nummer 24 (cel25cc-CC008). Zu 065/202 oder 13/17 passt
+        // er nicht, das einfache Pikachu bleibt sicher wie auf 68f0229
+        val cases = listOf(
+            listOf("2's) Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("IS Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("S) Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("BAS Pikachu KP 60" to 48, "40/147" to 12, "©2017 Pokémon" to 10) to "sm3-40",
+            listOf("SIS Pikachu" to 48, "KP 60" to 20, "025/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-025",
+            // pop5-13 "Pikachu δ" hat dieselbe Nummer und Gesamtzahl: er wird nicht sicher hinzugefuegt
+            listOf("2's) Pikachu KP 50" to 48, "13/17" to 12, "©2006 Pokémon" to 10) to "pop4-13",
+            // Promo ohne Gesamtzahl: das Praefix "SM" bestimmt das Set, S Pikachu hat keins
+            listOf("2's) Pikachu KP 70" to 48, "SM04" to 12, "©2017 Pokémon" to 10) to "smp-SM04",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Pikachu 1/53 aus dem Set von S Pikachu bleibt ebenfalls sicher: KP 60 passen nicht zu S Pikachu (KP 50)
+        val p1 = matcher.match(lines("S) Pikachu KP 60" to 48, "1/53" to 12, "©1999 Pokémon" to 10))
+        assertEquals(p1.show(), "basep-1", p1.best?.card?.id)
+        assertTrue(p1.show(), p1.confident)
+        // Gegenprobe: passen Gesamtzahl und KP zu S Pikachu, widerspricht er weiter. "_____'s Pikachu" mit 4/53 ist
+        // eher S Pikachu 24/53 mit verlorener Ziffer als Pikachu 4/53 (beide KP 50, auf 68f0229 sicher falsch);
+        // auch "S) Pikachu KP 50" mit 4/53 ist deshalb nicht sicher
+        for (name in listOf("_____'s Pikachu", "_____'s Pikachu KP 50", "S) Pikachu KP 50")) {
+            val s = matcher.match(lines(name to 48, "4/53" to 12, "©1999 Pokémon" to 10))
+            assertFalse(s.show(), s.confident)
+        }
+        // ... ein laengerer Name, dessen Logo nicht gelesen ist: "Rocket's Scyther" mit 102/109 ist Rocket's Scyther ex
+        // (ex7-102), nicht Sichlor-ex mit derselben Nummer und Gesamtzahl (ex1-102)
+        val r = matcher.match(lines("Rocket's Scyther KP 80" to 48, "102/109" to 12, "©2004 Pokémon" to 10))
+        assertEquals(r.show(), "ex7-102", r.best?.card?.id)
+        assertTrue(r.show(), r.confident)
+        // ... und ein Name, der den gelesenen nach rechts verlaengert, widerspricht wie bisher ("Mewtu" ist nicht Mew-ex)
+        val m = matcher.match(lines("SIS Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
+        assertFalse(m.show(), m.confident && m.best?.card?.id == "sv03.5-151")
     }
 
     @Test

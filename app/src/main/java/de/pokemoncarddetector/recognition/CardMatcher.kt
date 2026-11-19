@@ -187,7 +187,24 @@ class CardMatcher(private val index: CatalogIndex) {
         val knownCodes = parsed.setCodes.filter { index.setsByAbbreviation.containsKey(it) }.toSet()
         val codeSetIds = knownCodes.flatMap { index.setsByAbbreviation[it].orEmpty() }.map { it.id }.toSet()
         val candidates = HashMap<String, MatchCandidate>()
-        val contained = ContainedNames(index)
+        // Eine gelesene Gesamtzahl passt zur Karte, bei Promos ohne Gesamtzahl das Praefix ("SWSH" aus "SWSH050")
+        fun totalRead(set: IndexSet, card: IndexCard) = parsed.numbers.any { n ->
+            if (n.total != null) totalMatches(set, card, n.total)
+            else card.prefix.isNotEmpty() && n.key.takeWhile(Char::isLetter) == card.prefix
+        }
+        // Eine Karte mit diesem Namen, auch mit ungelesenem Logo ("Rocket's Scyther" fuer Rocket's Scyther ex), passt
+        // zu dem, was gelesen ist: zur Gesamtzahl oder zum Kuerzel (ist beides nicht gelesen, zu jedem Set) und zu
+        // gelesenen KP. Siehe [similarity]
+        val noSetRead = parsed.numbers.isEmpty() && codeSetIds.isEmpty()
+        val contained = ContainedNames(index) { name ->
+            (listOf(name) + IndexCard.LOGOS_NORM.map { name + it }).any { n ->
+                index.cardsByName[n].orEmpty().any { c ->
+                    val set = index.setsById[c.setId]
+                    set != null && (noSetRead || set.id in codeSetIds || totalRead(set, c)) &&
+                        (parsed.hp == null || c.hp == 0 || c.hp == parsed.hp)
+                }
+            }
+        }
 
         fun offer(c: MatchCandidate) {
             val old = candidates[c.card.id]
@@ -259,9 +276,7 @@ class CardMatcher(private val index: CatalogIndex) {
                     if (ns < 0.95 && ns <= bestNumberRaw + 0.02) continue
                     // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
                     if (bestNumberCandidate != null && bestNumberName >= 0.8 && logoUnread(card, bestNumberCandidate.card, parsed)) continue
-                    val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) } ||
-                        parsed.numbers.any { it.total == null && card.prefix.isNotEmpty() && it.key.takeWhile(Char::isLetter) == card.prefix }
-                    val c = score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds)
+                    val c = score(card, set, parsed, ns, numberMatched = false, totalRead(set, card), set.id in codeSetIds)
                     offer(if (closeNumber(card)) c.copy(score = c.score + W_CLOSE_NUMBER) else c)
                 }
             }
@@ -363,6 +378,11 @@ class CardMatcher(private val index: CatalogIndex) {
      * Ebenso wenig die Entwicklungsstufe davor und die Stufe (LV.) dahinter: "BASIS Pikachu" ist nicht "S Pikachu",
      * "Icognito ! LV.35" nicht "Icognito L" ([inStageLabel], [markLetter]). Ein Name endet auch nicht mitten in einer
      * Zahl: "Pantimos 40" ist Pantimos mit KP 40, nicht "Pantimos 4" ([endsInNumber]).
+     * Ein Name, der [name] nach links verlaengert, zaehlt nur, wenn eine Karte mit ihm zu gelesener Gesamtzahl oder
+     * Kuerzel und KP passt ([ContainedNames.fits]): die Zeichen davor koennen der Rest einer abgeschnittenen oder
+     * schlecht gelesenen Stufe sein ("2's) Pikachu", "IS Pikachu", "BAS Pikachu" mit 065/202 sind nicht S Pikachu,
+     * den es nur als 24/53 mit KP 50 und als dessen Nachdruck gibt). Ein Name, der [name] nach rechts verlaengert
+     * ("Mewtu" mit der Nummer von Mew-ex), zaehlt immer.
      * Nur wenn der andere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
      * ("Wenn du M-Simsala-EX ... spielst" auf Simsala-EX) oder bildet zufaellig einen Namen ("Icognito Schrift").
      */
@@ -377,7 +397,8 @@ class CardMatcher(private val index: CatalogIndex) {
         fun logoLonger(other: String) = other.startsWith(name) && other.substring(name.length) in IndexCard.LOGOS_NORM
         val longer = contained.of(core).any {
             it.length > name.length && spansLine(it.length) && it.contains(name) && foreign(it) &&
-                !logoLonger(it) && !markLetter(core, it, name) && !inStageLabel(core, it) && !endsInNumber(core, it)
+                !logoLonger(it) && !markLetter(core, it, name) && !inStageLabel(core, it) && !endsInNumber(core, it) &&
+                (it.startsWith(name) || contained.fits(it))
         }
         // Fremdes Logo ab Position p hinter [name] an Position start, auch mit Zahl dahinter. Es beginnt direkt nach
         // [name], oder [name] endet selbst auf ein Logo und die Zeile verlaengert es ("pikachuv" in "pikachuvmax").
@@ -437,8 +458,10 @@ class CardMatcher(private val index: CatalogIndex) {
     /**
      * [other] ist [name] plus ein Buchstabe, der in [core] zu einer Angabe hinter dem Namen gehoert:
      * - zur falsch gelesenen KP-Angabe ([HP_MISREAD]): "Icognito K60" ist "Icognito KP 60", nicht Icognito K;
-     * - zur Stufe aelterer Karten, also vor "v" und Ziffer ("LV.35", das L auch als "w" gelesen: "wv.12"):
-     *   "Icognito ! LV.35" ("!" faellt beim Normalisieren weg) ist nicht Icognito L. Kein Katalogname enthaelt
+     * - zur Stufe aelterer Karten, also vor "v" und Ziffer ("LV.35", das L auch als "w" gelesen: "wv.12"), oder
+     *   selbst als "l" oder "w" direkt vor der Ziffer, wenn das V fehlt ("Gastly w.12"): "Icognito ! LV.35" ("!"
+     *   faellt beim Normalisieren weg) ist nicht Icognito L, "Icognito !w.35" nicht Icognito W. Der Buchstabe im
+     *   Namen steht dagegen vor der ganzen Stufe ("Icognito W LV.35", "Icognito W w.35"). Kein Katalogname enthaelt
      *   "v" mit Ziffer dahinter.
      */
     private fun markLetter(core: String, other: String, name: String): Boolean =
@@ -446,7 +469,8 @@ class CardMatcher(private val index: CatalogIndex) {
             occurrences(core, other).any { i ->
                 val at = i + name.length
                 HP_MISREAD.find(core, at)?.range?.first == at ||
-                    (core.getOrNull(at + 1) == 'v' && core.getOrNull(at + 2) in '0'..'9')
+                    (core.getOrNull(at + 1) == 'v' && core.getOrNull(at + 2) in '0'..'9') ||
+                    (core[at] in "lw" && core.getOrNull(at + 1) in '0'..'9')
             }
 
     /**
@@ -495,8 +519,9 @@ class CardMatcher(private val index: CatalogIndex) {
     /**
      * Katalognamen, die woertlich in einer (normalisierten) Namenszeile stehen: "リザードンEX" enthaelt
      * リザードンex, リザードン und リザード. Gilt fuer einen [match]-Aufruf, damit der Matcher zustandslos bleibt.
+     * [fits]: eine Karte mit diesem Namen kann nach Gesamtzahl, Kuerzel und KP die gescannte sein.
      */
-    private class ContainedNames(private val index: CatalogIndex) {
+    private class ContainedNames(private val index: CatalogIndex, val fits: (String) -> Boolean) {
         private val cache = HashMap<String, List<String>>()
         /** true, sobald eine Zeile einem Namen widersprochen hat (sie ist dann sicher ein anderer Kartenname). */
         var contradiction = false
