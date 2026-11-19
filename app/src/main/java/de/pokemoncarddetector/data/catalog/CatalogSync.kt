@@ -31,7 +31,7 @@ class CatalogSync(
     private val store: CatalogStore,
     private val client: OkHttpClient = defaultClient(),
 ) {
-    data class Result(val newSets: Int, val updatedSets: Int, val totalSets: Int)
+    data class Result(val newSets: Int, val updatedSets: Int, val totalSets: Int, val failedSets: Int)
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -45,35 +45,63 @@ class CatalogSync(
             getObject("en/series/$EXCLUDED_SERIE")["sets"]?.jsonArray?.mapNotNull { it.jsonObject.str("id") }?.toSet()
         }.getOrNull().orEmpty()
 
-        val known = db.catalogDao().allSets().associateBy { it.id }
+        val dao = db.catalogDao()
+        val known = dao.allSets().associateBy { it.id }
         val totalsDe = listDe.associate { it.jsonObject.str("id").orEmpty() to it.jsonObject.total() }
         val totalsEn = listEn.associate { it.jsonObject.str("id").orEmpty() to it.jsonObject.total() }
         val allIds = (listEn.mapNotNull { it.jsonObject.str("id") } + listDe.mapNotNull { it.jsonObject.str("id") })
             .distinct()
             .filter { it !in pocketIds }
 
-        // Neu oder geaendert (andere Kartenzahl / jetzt auf Deutsch verfuegbar)
+        // Neuere Sets, in denen noch Bilder oder deutsche Namen fehlen (werden bei TCGdex oft nachgetragen)
+        val since = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date(System.currentTimeMillis() - 2L * 365 * 24 * 3600 * 1000))
+        val incomplete = dao.incompleteSetIds(since).toSet()
+
+        // Neu oder geaendert (mehr Karten / jetzt auf Deutsch verfuegbar / unvollstaendig)
         val changed = allIds.filter { id ->
             val k = known[id] ?: return@filter true
             val remoteTotal = maxOf(totalsDe[id] ?: 0, totalsEn[id] ?: 0)
-            remoteTotal != k.totalCount && remoteTotal > k.cardCount ||
-                (id in totalsDe && !k.availableInGerman) || k.cardCount == 0
+            (remoteTotal != k.totalCount && remoteTotal > k.cardCount) ||
+                (id in totalsDe && !k.availableInGerman) ||
+                id in incomplete
         }
 
         val semaphore = Semaphore(6)
-        var done = 0
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
+        val failed = java.util.concurrent.atomic.AtomicInteger(0)
         val payloads = coroutineScope {
             changed.map { id ->
                 async {
                     semaphore.withPermit {
-                        val de = if (id in totalsDe) runCatching { getObject("de/sets/$id") }.getOrNull() else null
-                        val en = if (id in totalsEn) runCatching { getObject("en/sets/$id") }.getOrNull() else null
-                        synchronized(this@CatalogSync) { done++ }
-                        onStatus("Sets werden geladen … ($done/${changed.size})", done.toFloat() / changed.size.coerceAtLeast(1))
-                        buildPayload(id, de, en)
+                        try {
+                            // Eine Sprache, die laut Liste existiert, MUSS geladen werden – sonst Set auslassen,
+                            // damit keine deutschen Namen durch englische ersetzt oder Karten geloescht werden.
+                            val de = if (id in totalsDe) getObjectWithRetry("de/sets/$id") else null
+                            val en = if (id in totalsEn) getObjectWithRetry("en/sets/$id") else null
+                            buildPayload(id, de, en, existing = dao.cardsOfSet(id).associateBy { it.localId })
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            failed.incrementAndGet()
+                            null
+                        } finally {
+                            val n = done.incrementAndGet()
+                            onStatus("Sets werden geladen … ($n/${changed.size})", n.toFloat() / changed.size.coerceAtLeast(1))
+                        }
                     }
                 }
-            }.awaitAll().filterNotNull().filter { it.meta.serie != EXCLUDED_SERIE }
+            }.awaitAll().filterNotNull()
+                .filter { it.meta.serie != EXCLUDED_SERIE && it.cards.isNotEmpty() }
+        }
+
+        // Nur wirklich geaenderte Sets speichern/zaehlen
+        val toWrite = payloads.filter { p ->
+            val k = known[p.meta.id] ?: return@filter true
+            val stored = dao.cardsOfSet(p.meta.id).associateBy { it.localId }
+            k.name != p.meta.name || k.cardCount != p.cards.size || k.officialCount != p.meta.official ||
+                k.releaseDate != p.meta.release || k.logoUrl != p.meta.logo ||
+                p.cards.any { c -> stored[c.localId]?.let { it.name != c.name || it.nameEn != c.nameEn || it.imageFlags != c.flags } ?: true }
         }
 
         val seriesNamesEn = seriesEn.associate { it.jsonObject.str("id").orEmpty() to it.jsonObject.str("name").orEmpty() }
@@ -88,15 +116,21 @@ class CatalogSync(
         }
 
         onStatus("Daten werden gespeichert …", null)
-        store.write(series, payloads, removeMissing = true)
+        store.write(series, toWrite, removeMissing = true)
         Result(
-            newSets = payloads.count { it.meta.id !in known },
-            updatedSets = payloads.count { it.meta.id in known },
+            newSets = toWrite.count { it.meta.id !in known },
+            updatedSets = toWrite.count { it.meta.id in known },
             totalSets = allIds.size,
+            failedSets = failed.get(),
         )
     }
 
-    private fun buildPayload(id: String, de: JsonObject?, en: JsonObject?): SetPayload? {
+    private fun buildPayload(
+        id: String,
+        de: JsonObject?,
+        en: JsonObject?,
+        existing: Map<String, de.pokemoncarddetector.data.db.CardEntity>,
+    ): SetPayload? {
         val base = de ?: en ?: return null
         val serie = base["serie"]?.jsonObjectOrNull()?.str("id") ?: "misc"
         val abbr = base["abbreviation"]?.jsonObjectOrNull()?.str("official")
@@ -119,9 +153,14 @@ class CatalogSync(
                 if (c.containsKey("image")) { if (lang == "de") acc.imgDe = true else acc.imgEn = true }
             }
         }
-        val cardList = cards.map { (lid, a) ->
-            val flags = (if (a.imgDe) 1 else 0) or (if (a.imgEn) 2 else 0) or (if (a.de != null) 4 else 0)
-            CatalogCard(lid, a.de ?: a.en ?: "", a.en ?: a.de ?: "", flags)
+        val imageSet = imageSetIdFor(id)
+        val cardList = cards.entries.sortedWith(compareBy(naturalCardOrder()) { it.key }).map { (lid, a) ->
+            var img = (if (a.imgDe) 1 else 0) or (if (a.imgEn) 2 else 0)
+            if (imageSet != id && img == 0) {
+                // Unter-Sets: API liefert kein Bild-Feld, Bilder liegen im Haupt-Set-Ordner
+                img = existing[lid]?.imageFlags?.and(3)?.takeIf { it != 0 } ?: 3
+            }
+            CatalogCard(lid, a.de ?: a.en ?: "", a.en ?: a.de ?: "", img or (if (a.de != null) 4 else 0))
         }
         val meta = CatalogSet(
             id = id,
@@ -135,6 +174,7 @@ class CatalogSync(
             de = de != null,
             logo = de?.str("logo") ?: en?.str("logo") ?: "",
             symbol = de?.str("symbol") ?: en?.str("symbol") ?: "",
+            img = imageSet,
         )
         return SetPayload(meta, cardList)
     }
@@ -142,11 +182,30 @@ class CatalogSync(
     private fun get(path: String): JsonElement {
         val req = Request.Builder().url("$API/$path").header("Accept", "application/json").build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} bei $path")
+            if (!resp.isSuccessful) throw HttpException(resp.code, path)
             val body = resp.body?.string() ?: throw IOException("Leere Antwort bei $path")
             return json.parseToJsonElement(body)
         }
     }
+
+    /** Wiederholt bei Netzwerkfehlern, 429 und 5xx mit wachsender Wartezeit. */
+    private suspend fun getObjectWithRetry(path: String): JsonObject {
+        var last: Exception? = null
+        repeat(4) { attempt ->
+            try {
+                return getObject(path)
+            } catch (e: HttpException) {
+                if (e.code != 429 && e.code < 500) throw e
+                last = e
+            } catch (e: IOException) {
+                last = e
+            }
+            kotlinx.coroutines.delay(1000L * (attempt + 1) * (attempt + 1))
+        }
+        throw last ?: IOException("Fehler bei $path")
+    }
+
+    private class HttpException(val code: Int, path: String) : IOException("HTTP $code bei $path")
 
     private fun getArray(path: String): JsonArray = get(path).jsonArray
     private fun getObject(path: String): JsonObject = get(path).jsonObject

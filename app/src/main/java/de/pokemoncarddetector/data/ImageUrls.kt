@@ -28,7 +28,7 @@ object ImageUrls {
     }
 
     fun card(item: CardItem, quality: Quality, language: ImageLanguage): String? =
-        card(item.serieId, item.card.setId, item.card.localId, item.card.imageFlags, quality, language)
+        card(item.serieId, item.imageSetId.ifBlank { item.card.setId }, item.card.localId, item.card.imageFlags, quality, language)
 
     /** Set-Logo (z.B. Schriftzug "Farbenschock"). */
     fun logo(logoUrl: String): String? = logoUrl.takeIf { it.isNotBlank() }?.let { "$it.webp" }

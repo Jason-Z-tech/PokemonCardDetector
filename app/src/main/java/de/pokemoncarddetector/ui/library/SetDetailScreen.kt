@@ -195,7 +195,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                     CardTile(item, state.settings.showImages, state.settings.imageLanguage, Modifier.fillMaxWidth())
                     if (state.settings.showImages) {
                         Text(
-                            "${item.card.localId} · ${item.card.name}",
+                            "${item.displayLocalId} · ${item.card.name}",
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

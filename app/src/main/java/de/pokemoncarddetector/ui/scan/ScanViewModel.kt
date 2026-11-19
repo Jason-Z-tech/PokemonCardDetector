@@ -2,12 +2,9 @@ package de.pokemoncarddetector.ui.scan
 
 import android.content.Context
 import android.net.Uri
-import androidx.annotation.OptIn
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageProxy
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.mlkit.vision.common.InputImage
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.CardRepository
 import de.pokemoncarddetector.data.SettingsRepository
@@ -17,6 +14,7 @@ import de.pokemoncarddetector.recognition.CardTextRecognizer
 import de.pokemoncarddetector.recognition.CatalogIndex
 import de.pokemoncarddetector.recognition.FrameFilter
 import de.pokemoncarddetector.recognition.FrameGeometry
+import de.pokemoncarddetector.recognition.ImageLoading
 import de.pokemoncarddetector.recognition.MatchResult
 import de.pokemoncarddetector.recognition.OcrLine
 import de.pokemoncarddetector.recognition.ScanStabilizer
@@ -51,7 +49,6 @@ data class ScanUiState(
     val status: String = "Halte eine Karte in den Rahmen",
     val busy: Boolean = false,
     val paused: Boolean = false,
-    val torchOn: Boolean = false,
 )
 
 sealed interface ScanEvent {
@@ -100,11 +97,13 @@ class ScanViewModel(
     fun onFrame(lines: List<OcrLine>, imageWidth: Int, imageHeight: Int) {
         if (_state.value.paused || _state.value.busy) return
         if (!matching.compareAndSet(false, true)) return
-        viewModelScope.launch(Dispatchers.Default) {
+        // Abgleich im Hintergrund, Zustand (Stabilisierer, Erkennung) nur auf dem Main-Thread aendern
+        viewModelScope.launch {
             try {
-                val filtered = FrameFilter.filter(lines, imageWidth, imageHeight, frame)
-                val result = matcher().match(filtered)
-                handleLive(result)
+                val result = withContext(Dispatchers.Default) {
+                    matcher().match(FrameFilter.filter(lines, imageWidth, imageHeight, frame))
+                }
+                if (!_state.value.paused && !_state.value.busy) handleLive(result)
             } catch (_: Throwable) {
                 // Einzelne Bilder duerfen fehlschlagen
             } finally {
@@ -169,22 +168,35 @@ class ScanViewModel(
 
     // ---------------- Foto / Galerie ----------------
 
-    @OptIn(ExperimentalGetImage::class)
+    /** Ausloeser gedrueckt: Live-Erkennung pausieren, bis das Foto ausgewertet ist. */
+    fun onShutter() {
+        _state.update { it.copy(busy = true, status = "Foto wird aufgenommen …") }
+    }
+
+    fun onCaptureFailed(message: String) {
+        _state.update { it.copy(busy = false, status = "Halte eine Karte in den Rahmen") }
+        viewModelScope.launch { _events.send(ScanEvent.Message(message)) }
+    }
+
+    /** Aufgenommenes Foto auswerten. Wird vom Kamera-Thread aufgerufen; schliesst [proxy] immer. */
     fun analyzeCapture(proxy: ImageProxy) {
-        val media = proxy.image
-        if (media == null) {
-            proxy.close(); return
-        }
-        val rotation = proxy.imageInfo.rotationDegrees
-        val (w, h) = if (rotation % 180 == 0) proxy.width to proxy.height else proxy.height to proxy.width
-        val input = InputImage.fromMediaImage(media, rotation)
-        analyzeSingle(onDone = { proxy.close() }) {
-            FrameFilter.filter(recognizer.recognize(input), w, h, frame)
+        val rotation = recognizer.fixedRotationDegrees ?: proxy.imageInfo.rotationDegrees
+        analyzeSingle(onDone = { runCatching { proxy.close() } }) {
+            // JPEG -> Bitmap im Hintergrund dekodieren (nicht auf dem UI-Thread)
+            val bitmap = withContext(Dispatchers.Default) { proxy.toBitmap() }
+            val (w, h) = if (rotation % 180 == 0) bitmap.width to bitmap.height else bitmap.height to bitmap.width
+            val lines = recognizer.recognize(bitmap, rotation)
+            FrameFilter.filter(lines, w, h, frame, fallbackToAll = true)
         }
     }
 
     fun analyzeUri(context: Context, uri: Uri) {
-        analyzeSingle { recognizer.recognize(context, uri) }
+        val resolver = context.applicationContext.contentResolver
+        _state.update { it.copy(busy = true) }
+        analyzeSingle {
+            val bitmap = withContext(Dispatchers.IO) { ImageLoading.decodeScaled(resolver, uri, maxSize = 2560) }
+            recognizer.recognize(bitmap, 0)
+        }
     }
 
     private fun analyzeSingle(onDone: () -> Unit = {}, recognize: suspend () -> List<OcrLine>) {
@@ -196,16 +208,18 @@ class ScanViewModel(
                 if (result.best == null) {
                     _state.update { it.copy(status = "Keine Karte erkannt") }
                     _events.send(
-                        ScanEvent.Message("Keine Karte erkannt. Tipp: näher ran, gutes Licht, Nummer unten links/rechts muss scharf sein.")
+                        ScanEvent.Message("Keine Karte erkannt. Tipp: näher ran, gutes Licht, die Nummer unten auf der Karte muss scharf sein.")
                     )
                 } else {
                     showDetection(result, fromPhoto = true)
                     _state.update { it.copy(status = if (result.confident) "Erkannt: ${result.best.card.name}" else "Bitte Treffer prüfen") }
                 }
             } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 _events.send(ScanEvent.Message("Bild konnte nicht gelesen werden: ${t.message ?: "Fehler"}"))
             } finally {
                 onDone()
+                stabilizer.reset()
                 _state.update { it.copy(busy = false) }
             }
         }
@@ -261,8 +275,6 @@ class ScanViewModel(
         _state.update { it.copy(paused = paused) }
         if (!paused) viewModelScope.launch { refreshDetection() }
     }
-
-    fun setTorch(on: Boolean) = _state.update { it.copy(torchOn = on) }
 
     fun setAutoAdd(on: Boolean) {
         viewModelScope.launch { settingsRepo.setAutoAdd(on) }

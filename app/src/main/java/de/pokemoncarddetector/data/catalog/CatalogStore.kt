@@ -12,8 +12,11 @@ class CatalogStore(private val context: Context, private val db: AppDatabase) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** Version der mitgelieferten assets/catalog.json */
-    suspend fun bundledVersion(): String = withContext(Dispatchers.IO) { readBundled().version }
+    /** Version der mitgelieferten assets/catalog.json (aus der kleinen Datei catalog_version.txt). */
+    suspend fun bundledVersion(): String = withContext(Dispatchers.IO) {
+        runCatching { context.assets.open("catalog_version.txt").bufferedReader().use { it.readText().trim() } }
+            .getOrNull()?.takeIf { it.isNotEmpty() } ?: readBundled().version
+    }
 
     suspend fun readBundled(): CatalogFile = withContext(Dispatchers.IO) {
         context.assets.open("catalog.json").bufferedReader(Charsets.UTF_8).use { reader ->

@@ -30,13 +30,16 @@ data class SetEntity(
     val totalCount: Int,
     val availableInGerman: Boolean,
     val logoUrl: String,
+    /** Ordner der Kartenbilder (bei Unter-Sets wie swsh9tg das Haupt-Set swsh9). */
+    @ColumnInfo(defaultValue = "''")
+    val imageSetId: String,
     /** Anzahl Karten, die in der Datenbank zu diesem Set gespeichert sind. */
     val cardCount: Int,
 )
 
 @Entity(
     tableName = "cards",
-    indices = [Index("setId"), Index("searchKey")],
+    indices = [Index("setId"), Index("searchKey"), Index("numberKey")],
 )
 data class CardEntity(
     /** TCGdex-ID, z.B. "swsh4-25" */
@@ -51,6 +54,9 @@ data class CardEntity(
     val sortIndex: Int,
     /** normalisierter Name (de + en) fuer die Suche */
     val searchKey: String,
+    /** normalisierte Nummer fuer die Suche: "025" -> "25", "TG05" -> "TG5" */
+    @ColumnInfo(defaultValue = "''")
+    val numberKey: String,
 )
 
 @Entity(tableName = "collection")
@@ -78,14 +84,30 @@ data class CardItem(
     @ColumnInfo(name = "serieId") val serieId: String,
     @ColumnInfo(name = "setOfficial") val setOfficial: Int,
     @ColumnInfo(name = "setRelease") val setRelease: String,
+    @ColumnInfo(name = "imageSetId") val imageSetId: String,
 ) {
     val owned: Boolean get() = quantity > 0
 
-    /** "25/185" bzw. "TG05" wenn keine Gesamtzahl bekannt ist. */
+    /** Nummer zum Anzeigen ("%3F" -> "?"). */
+    val displayLocalId: String
+        get() = runCatching { java.net.URLDecoder.decode(card.localId, "UTF-8") }.getOrDefault(card.localId)
+
+    /** Nummer wie auf der Karte gedruckt, z.B. "025/185" (ab Schwert & Schild dreistellig) oder "4/102". */
     val numberLabel: String
-        get() = if (setOfficial > 0 && card.localId.firstOrNull()?.isDigit() == true) {
-            "${card.localId}/${setOfficial.toString().padStart(minOf(3, card.localId.length), '0')}"
-        } else card.localId
+        get() {
+            val id = displayLocalId
+            val m = NUMBER.matchEntire(id)
+            if (setOfficial <= 0 || m == null) return id
+            val pad = if (serieId in PADDED_SERIES) 3 else 0
+            val digits = m.groupValues[1].trimStart('0').ifEmpty { "0" }.padStart(pad, '0')
+            return "$digits${m.groupValues[2]}/${setOfficial.toString().padStart(pad, '0')}"
+        }
+
+    private companion object {
+        val NUMBER = Regex("^([0-9]+)([a-zA-Z]?)$")
+        /** Serien, die Nummern dreistellig drucken (025/185) */
+        val PADDED_SERIES = setOf("swsh", "sv", "me")
+    }
 }
 
 data class CollectionTotals(

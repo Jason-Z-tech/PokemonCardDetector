@@ -1,9 +1,7 @@
 package de.pokemoncarddetector.recognition
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -23,14 +21,18 @@ class CardTextRecognizer : Closeable {
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
+    /**
+     * Feste Drehung fuer Kamerabilder (Sensorausrichtung bezogen auf Hochformat).
+     * CameraX passt die Drehung sonst an die Handyhaltung an, die Vorschau bleibt aber im Hochformat –
+     * dann passen die Textpositionen nicht mehr zum Scan-Rahmen.
+     */
+    @Volatile var fixedRotationDegrees: Int? = null
+
     suspend fun recognize(image: InputImage): List<OcrLine> = suspendCancellableCoroutine { cont ->
         recognizer.process(image)
             .addOnSuccessListener { text -> if (cont.isActive) cont.resume(text.toLines()) }
             .addOnFailureListener { e -> if (cont.isActive) cont.resumeWithException(e) }
     }
-
-    suspend fun recognize(context: Context, uri: Uri): List<OcrLine> =
-        recognize(InputImage.fromFilePath(context, uri))
 
     suspend fun recognize(bitmap: Bitmap, rotationDegrees: Int = 0): List<OcrLine> =
         recognize(InputImage.fromBitmap(bitmap, rotationDegrees))
@@ -54,7 +56,7 @@ class CardTextRecognizer : Closeable {
                 proxy.close()
                 return
             }
-            val rotation = proxy.imageInfo.rotationDegrees
+            val rotation = fixedRotationDegrees ?: proxy.imageInfo.rotationDegrees
             val (w, h) = if (rotation % 180 == 0) proxy.width to proxy.height else proxy.height to proxy.width
             val input = InputImage.fromMediaImage(media, rotation)
             recognizer.process(input)

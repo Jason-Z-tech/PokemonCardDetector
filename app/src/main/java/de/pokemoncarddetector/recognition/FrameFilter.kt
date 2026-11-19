@@ -17,7 +17,17 @@ data class FrameGeometry(
  */
 object FrameFilter {
 
-    fun filter(lines: List<OcrLine>, imageWidth: Int, imageHeight: Int, frame: FrameGeometry?): List<OcrLine> {
+    /**
+     * @param fallbackToAll true = wenn fast nichts im Rahmen liegt, alle Zeilen nehmen (nur fuer Einzelfotos sinnvoll).
+     *   Live wird strikt gefiltert, damit Karten neben dem Rahmen nicht erkannt werden.
+     */
+    fun filter(
+        lines: List<OcrLine>,
+        imageWidth: Int,
+        imageHeight: Int,
+        frame: FrameGeometry?,
+        fallbackToAll: Boolean = false,
+    ): List<OcrLine> {
         if (frame == null || imageWidth <= 0 || imageHeight <= 0 || frame.viewWidth <= 0 || frame.viewHeight <= 0) return lines
         val scale = maxOf(frame.viewWidth / imageWidth.toFloat(), frame.viewHeight / imageHeight.toFloat())
         val dx = (frame.viewWidth - imageWidth * scale) / 2f
@@ -34,6 +44,6 @@ object FrameFilter {
             val cy = (line.top + line.bottom) / 2f
             cx in l..r && cy in t..b
         }
-        return if (inside.size >= 2) inside else lines
+        return if (fallbackToAll && inside.size < 2) lines else inside
     }
 }

@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 private const val CARD_ITEM_COLUMNS = """
     c.*, COALESCE(col.quantity, 0) AS quantity, s.name AS setName, s.nameEn AS setNameEn,
-    s.serieId AS serieId, s.officialCount AS setOfficial, s.releaseDate AS setRelease
+    s.serieId AS serieId, s.officialCount AS setOfficial, s.releaseDate AS setRelease, s.imageSetId AS imageSetId
 """
 
 @Dao
@@ -23,8 +23,21 @@ interface CatalogDao {
     @Upsert
     suspend fun upsertCards(cards: List<CardEntity>)
 
-    @Query("DELETE FROM cards WHERE setId = :setId AND id NOT IN (:keepIds)")
+    /** Entfernt Karten, die es im Set nicht mehr gibt – aber nie Karten, die jemand besitzt. */
+    @Query("DELETE FROM cards WHERE setId = :setId AND id NOT IN (:keepIds) AND id NOT IN (SELECT cardId FROM collection)")
     suspend fun deleteCardsNotIn(setId: String, keepIds: List<String>)
+
+    @Query("SELECT * FROM cards WHERE setId = :setId")
+    suspend fun cardsOfSet(setId: String): List<CardEntity>
+
+    /** Sets ab [sinceDate], in denen noch Karten ohne Bild oder ohne deutschen Namen sind. */
+    @Query(
+        """
+        SELECT DISTINCT c.setId FROM cards c JOIN sets s ON s.id = c.setId
+        WHERE s.releaseDate >= :sinceDate AND ((c.imageFlags & 3) = 0 OR (s.availableInGerman AND (c.imageFlags & 4) = 0))
+        """
+    )
+    suspend fun incompleteSetIds(sinceDate: String): List<String>
 
     @Query("SELECT COUNT(*) FROM cards")
     suspend fun cardCount(): Int
@@ -90,13 +103,13 @@ interface CatalogDao {
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
         LEFT JOIN collection col ON col.cardId = c.id
-        WHERE c.searchKey LIKE '%' || :query || '%'
-           OR (:number != '' AND c.localId = :number)
+        WHERE (:query != '' AND c.searchKey LIKE '%' || :query || '%')
+           OR (:numberKey != '' AND c.numberKey = :numberKey AND (:total = 0 OR s.officialCount = :total))
         ORDER BY (COALESCE(col.quantity, 0) > 0) DESC, s.releaseDate DESC, c.sortIndex
         LIMIT 300
         """
     )
-    fun searchCards(query: String, number: String): Flow<List<CardItem>>
+    fun searchCards(query: String, numberKey: String, total: Int): Flow<List<CardItem>>
 
     @Query(
         """
@@ -135,14 +148,29 @@ abstract class CollectionDao {
     @Query("SELECT * FROM collection WHERE quantity > 0")
     abstract suspend fun all(): List<CollectionEntity>
 
-    @Query("SELECT COUNT(*) AS uniqueCards, COALESCE(SUM(quantity), 0) AS copies FROM collection WHERE quantity > 0")
+    @Query(
+        """
+        SELECT COUNT(*) AS uniqueCards, COALESCE(SUM(col.quantity), 0) AS copies
+        FROM collection col JOIN cards k ON k.id = col.cardId
+        WHERE col.quantity > 0
+        """
+    )
     abstract fun observeTotals(): Flow<CollectionTotals>
 
-    /** Setzt die Anzahl (0 = entfernen). Gibt die neue Anzahl zurueck. */
+    /**
+     * Setzt die Anzahl (0 = entfernen). Gibt die neue Anzahl zurueck.
+     * Der Zeitpunkt fuer "Zuletzt hinzugefuegt" aendert sich nur, wenn die Anzahl steigt.
+     */
     @Transaction
     open suspend fun setQuantity(cardId: String, quantity: Int): Int {
         val q = quantity.coerceIn(0, 999)
-        if (q == 0) delete(cardId) else upsert(CollectionEntity(cardId, q, System.currentTimeMillis()))
+        if (q == 0) {
+            delete(cardId)
+        } else {
+            val old = entry(cardId)
+            val time = if (old == null || q > old.quantity) System.currentTimeMillis() else old.updatedAt
+            upsert(CollectionEntity(cardId, q, time))
+        }
         return q
     }
 
@@ -152,4 +180,7 @@ abstract class CollectionDao {
         val current = quantity(cardId) ?: 0
         return setQuantity(cardId, current + delta)
     }
+
+    @Query("SELECT * FROM collection WHERE cardId = :cardId")
+    abstract suspend fun entry(cardId: String): CollectionEntity?
 }

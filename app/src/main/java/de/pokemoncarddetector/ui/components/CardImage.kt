@@ -111,7 +111,7 @@ private fun TextTile(item: CardItem, dim: Boolean, shape: RoundedCornerShape) {
             if (maxWidth < 90.dp) {
                 // Kleine Kachel (Listen): nur die Nummer
                 Text(
-                    item.card.localId,
+                    item.displayLocalId,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,

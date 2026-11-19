@@ -11,13 +11,49 @@ Aufruf:  python3 tools/build_catalog.py
 import concurrent.futures as cf
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
 
 API = "https://api.tcgdex.net/v2"
 EXCLUDED_SERIES = {"tcgp"}  # Pokemon TCG Pocket = nur digital, keine echten Karten
-OUT = os.path.join(os.path.dirname(__file__), "..", "app", "src", "main", "assets", "catalog.json")
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "src", "main", "assets")
+OUT = os.path.join(ASSETS_DIR, "catalog.json")
+VERSION_OUT = os.path.join(ASSETS_DIR, "catalog_version.txt")
+ASSETS = "https://assets.tcgdex.net"
+
+# Unter-Sets (Trainer-Galerie, Galar-Galerie, Glitzer-Tresor) liegen bei den Bildern im Ordner des Haupt-Sets:
+# swsh9tg -> swsh9, swsh12.5gg -> swsh12.5, swsh4.5sv -> swsh4.5
+SUBSET_RE = re.compile(r"^(swsh\d+(?:\.5)?)(tg|gg|sv)$")
+
+
+def image_set_id(set_id):
+    m = SUBSET_RE.match(set_id)
+    return m.group(1) if m else set_id
+
+
+def natural_key(local_id):
+    """Sortierung wie auf den Karten: SV2 vor SV10, 23 vor 100, Buchstaben-Praefix zuerst."""
+    m = re.match(r"^([A-Za-z]*)(\d+)(.*)$", local_id)
+    if not m:
+        return ("~", 10**9, local_id)
+    return (m.group(1).upper(), int(m.group(2)), m.group(3))
+
+
+def head_ok(url):
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "PokemonCardDetector-catalog-builder"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status == 200
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False
+            time.sleep(1 + attempt)
+        except Exception:  # noqa: BLE001
+            time.sleep(1 + attempt)
+    return False
 
 
 def get(path, retries=4):
@@ -77,6 +113,18 @@ def main():
                 cards[lid][lang] = c.get("name")
                 if "image" in c:
                     cards[lid]["imgDe" if lang == "de" else "imgEn"] = True
+        img_set = image_set_id(sid)
+        if img_set != sid:
+            # Fuer Unter-Sets liefert die API keine Bild-Felder -> Bilder im Haupt-Set-Ordner pruefen
+            def probe(lid):
+                de_ok = head_ok(f"{ASSETS}/de/{serie}/{img_set}/{lid}/low.webp")
+                en_ok = head_ok(f"{ASSETS}/en/{serie}/{img_set}/{lid}/low.webp")
+                return lid, de_ok, en_ok
+            with cf.ThreadPoolExecutor(max_workers=12) as ex:
+                for lid, de_ok, en_ok in ex.map(probe, order):
+                    cards[lid]["imgDe"] = cards[lid]["imgDe"] or de_ok
+                    cards[lid]["imgEn"] = cards[lid]["imgEn"] or en_ok
+        order.sort(key=natural_key)
         card_rows = []
         for lid in order:
             c = cards[lid]
@@ -96,6 +144,7 @@ def main():
             "de": bool(de),
             "logo": logo or "",
             "symbol": symbol or "",
+            "img": img_set,
             "cards": card_rows,
         })
 
@@ -111,6 +160,8 @@ def main():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(catalog, f, ensure_ascii=False, separators=(",", ":"))
+    with open(VERSION_OUT, "w", encoding="utf-8") as f:
+        f.write(catalog["version"])
     n_cards = sum(len(s["cards"]) for s in out_sets)
     print(f"{len(out_sets)} Sets, {n_cards} Karten, {os.path.getsize(OUT) // 1024} KB -> {os.path.normpath(OUT)}")
 

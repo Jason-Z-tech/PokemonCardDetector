@@ -21,13 +21,27 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    signingConfigs {
+        // Fester Schluessel des Projekts, damit neue APKs (auch aus GitHub Actions) als Update
+        // installiert werden koennen und die Sammlung erhalten bleibt. Fuer einen Play-Store-Release
+        // einen eigenen, geheimen Schluessel per Umgebungsvariablen verwenden.
+        create("release") {
+            storeFile = file(System.getenv("KEYSTORE_FILE") ?: "../keystore/karten-scanner.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "kartenscanner"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "karten-scanner"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "kartenscanner"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signiert mit dem Debug-Schluessel, damit die APK direkt installierbar ist.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

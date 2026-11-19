@@ -44,25 +44,31 @@ class CatalogManager(
 
     private val mutex = Mutex()
 
-    /** Beim App-Start: mitgelieferten Katalog importieren, falls DB leer oder Datei neuer. */
+    /**
+     * Beim App-Start: mitgelieferten Katalog importieren, falls die DB leer ist (Wartebildschirm)
+     * oder die Datei neuer ist als der letzte Import (im Hintergrund, App bleibt bedienbar).
+     */
     fun ensureReady() {
         scope.launch {
             mutex.withLock {
                 try {
-                    val bundled = store.bundledVersion()
-                    val current = settings.currentCatalogVersion()
                     val empty = store.isEmpty()
-                    if (empty || current == null || bundled > current) {
-                        _state.value = CatalogState.Importing(0f)
-                        store.importBundled { p -> _state.value = CatalogState.Importing(p) }
-                        settings.setCatalogVersion(maxOf(bundled, current ?: ""))
+                    if (!empty) _state.value = CatalogState.Ready
+                    val bundled = store.bundledVersion()
+                    val imported = settings.currentBundledVersion()
+                    if (empty || imported == null || bundled > imported) {
+                        if (empty) _state.value = CatalogState.Importing(0f)
+                        store.importBundled { p -> if (empty) _state.value = CatalogState.Importing(p) }
+                        settings.setBundledVersion(bundled)
                         repository.invalidateIndex()
                     }
                     _state.value = CatalogState.Ready
                     // Index im Hintergrund vorbereiten, damit der erste Scan schnell ist
                     repository.catalogIndex()
                 } catch (t: Throwable) {
-                    _state.value = CatalogState.Failed(t.message ?: t.javaClass.simpleName)
+                    if (_state.value != CatalogState.Ready) {
+                        _state.value = CatalogState.Failed(t.message ?: t.javaClass.simpleName)
+                    }
                 }
             }
         }
@@ -76,12 +82,13 @@ class CatalogManager(
                 _syncState.value = SyncState.Running("Verbinde …", null)
                 try {
                     val result = sync.sync { msg, p -> _syncState.update { SyncState.Running(msg, p) } }
-                    settings.setCatalogVersion(SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()))
+                    settings.setLastOnlineSync(SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()))
                     repository.invalidateIndex()
                     repository.catalogIndex()
-                    val msg = when {
-                        result.newSets == 0 && result.updatedSets == 0 -> "Alles aktuell – ${result.totalSets} Sets."
-                        else -> "${result.newSets} neue und ${result.updatedSets} aktualisierte Sets geladen."
+                    val msg = buildString {
+                        if (result.newSets == 0 && result.updatedSets == 0) append("Alles aktuell – ${result.totalSets} Sets.")
+                        else append("${result.newSets} neue und ${result.updatedSets} aktualisierte Sets geladen.")
+                        if (result.failedSets > 0) append(" ${result.failedSets} Sets konnten nicht geladen werden – bitte später erneut versuchen.")
                     }
                     _syncState.value = SyncState.Done(msg)
                 } catch (t: Throwable) {

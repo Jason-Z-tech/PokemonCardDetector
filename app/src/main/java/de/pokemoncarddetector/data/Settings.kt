@@ -41,7 +41,10 @@ class SettingsRepository(private val context: Context) {
         val AUTO_ADD = booleanPreferencesKey("auto_add")
         val ONLY_OWNED_SETS = booleanPreferencesKey("only_owned_sets")
         val VIBRATE = booleanPreferencesKey("vibrate")
-        val CATALOG_VERSION = stringPreferencesKey("catalog_version")
+        /** Version der zuletzt importierten mitgelieferten Katalogdatei */
+        val BUNDLED_VERSION = stringPreferencesKey("bundled_catalog_version")
+        /** Datum der letzten Online-Aktualisierung (nur Anzeige) */
+        val LAST_SYNC = stringPreferencesKey("last_online_sync")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -54,9 +57,15 @@ class SettingsRepository(private val context: Context) {
         )
     }
 
-    val catalogVersion: Flow<String?> = context.dataStore.data.map { it[Keys.CATALOG_VERSION] }
+    val bundledVersion: Flow<String?> = context.dataStore.data.map { it[Keys.BUNDLED_VERSION] }
+    val lastOnlineSync: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_SYNC] }
 
-    suspend fun currentCatalogVersion(): String? = catalogVersion.first()
+    /** Stand der Kartendaten zur Anzeige: neueres Datum aus Katalogdatei und Online-Abgleich */
+    val catalogVersion: Flow<String?> = context.dataStore.data.map { p ->
+        listOfNotNull(p[Keys.BUNDLED_VERSION], p[Keys.LAST_SYNC]).maxOrNull()
+    }
+
+    suspend fun currentBundledVersion(): String? = bundledVersion.first()
 
     private suspend fun <T> set(key: Preferences.Key<T>, value: T) {
         context.dataStore.edit { it[key] = value }
@@ -67,5 +76,6 @@ class SettingsRepository(private val context: Context) {
     suspend fun setAutoAdd(value: Boolean) = set(Keys.AUTO_ADD, value)
     suspend fun setOnlyOwnedSets(value: Boolean) = set(Keys.ONLY_OWNED_SETS, value)
     suspend fun setVibrate(value: Boolean) = set(Keys.VIBRATE, value)
-    suspend fun setCatalogVersion(value: String) = set(Keys.CATALOG_VERSION, value)
+    suspend fun setBundledVersion(value: String) = set(Keys.BUNDLED_VERSION, value)
+    suspend fun setLastOnlineSync(value: String) = set(Keys.LAST_SYNC, value)
 }

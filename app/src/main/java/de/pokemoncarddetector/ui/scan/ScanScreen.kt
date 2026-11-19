@@ -1,6 +1,13 @@
 package de.pokemoncarddetector.ui.scan
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.TorchState
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.content.pm.PackageManager
 import android.util.Size
 import android.view.HapticFeedbackConstants
@@ -105,7 +112,6 @@ import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.card.CardSheet
 import de.pokemoncarddetector.ui.components.CARD_ASPECT
 import de.pokemoncarddetector.ui.components.CardTile
-import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,11 +124,22 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val view = LocalView.current
 
-    var hasPermission by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    val activity = context as? android.app.Activity
+    fun cameraGranted() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    var hasPermission by remember { mutableStateOf(cameraGranted()) }
+    // Nach zweimaligem Ablehnen zeigt Android keinen Dialog mehr -> Weg zu den Einstellungen anbieten
+    var permanentlyDenied by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasPermission = granted
+        permanentlyDenied = !granted && activity != null &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
     }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
     LaunchedEffect(Unit) { if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA) }
+    // Rueckkehr aus den Einstellungen: Berechtigung neu pruefen
+    LifecycleResumeEffect(Unit) {
+        if (!hasPermission && cameraGranted()) hasPermission = true
+        onPauseOrDispose { }
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.analyzeUri(context, uri)
@@ -145,17 +162,42 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
             executor.shutdown()
         }
     }
-    val scope = rememberCoroutineScope()
-    val takePhoto: () -> Unit = {
-        controller.takePicture(executor, object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: ImageProxy) {
-                scope.launch { vm.analyzeCapture(image) }
+    // Kamera ist erst nach der asynchronen Initialisierung benutzbar (sonst stuerzt takePicture ab)
+    var cameraReady by remember { mutableStateOf(false) }
+    var hasFlash by remember { mutableStateOf(false) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(controller) {
+        val future = controller.initializationFuture
+        future.addListener({
+            if (runCatching { future.get() }.isFailure) {
+                cameraError = "Kamera konnte nicht gestartet werden – nutze die Galerie."
+                return@addListener
             }
-
-            override fun onError(exception: ImageCaptureException) {
-                scope.launch { snackbar.showSnackbar("Foto fehlgeschlagen: ${exception.message ?: "unbekannter Fehler"}") }
+            if (!controller.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && controller.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                controller.cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
             }
-        })
+            cameraReady = true
+        }, ContextCompat.getMainExecutor(context))
+        onDispose { }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Taschenlampe: CameraX ist die Wahrheit (wird beim Pausieren der App automatisch ausgeschaltet)
+    var torchOn by remember { mutableStateOf(false) }
+    DisposableEffect(controller, lifecycleOwner) {
+        val observer = androidx.lifecycle.Observer<Int> { torchOn = it == TorchState.ON }
+        controller.torchState.observe(lifecycleOwner, observer)
+        onDispose { controller.torchState.removeObserver(observer) }
+    }
+    val takePhoto: () -> Unit = takePhoto@{
+        if (!cameraReady || state.busy) return@takePhoto
+        vm.onShutter()
+        runCatching {
+            controller.takePicture(executor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) = vm.analyzeCapture(image)
+                override fun onError(exception: ImageCaptureException) =
+                    vm.onCaptureFailed("Foto fehlgeschlagen: ${exception.message ?: "unbekannter Fehler"}")
+            })
+        }.onFailure { vm.onCaptureFailed("Kamera ist noch nicht bereit – bitte kurz warten.") }
     }
 
     var showAlternatives by remember { mutableStateOf(false) }
@@ -168,9 +210,17 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
             .background(Color.Black),
     ) {
         if (hasPermission) {
-            CameraPreview(vm, controller, state.torchOn, detected = state.detection?.confident == true)
+            CameraPreview(vm, controller, detected = state.detection?.confident == true, onError = { cameraError = it })
         } else {
-            NoPermission(onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) })
+            NoPermission(
+                permanentlyDenied = permanentlyDenied,
+                onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onOpenSettings = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                    )
+                },
+            )
         }
 
         // Obere Leiste
@@ -191,9 +241,12 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 RoundIcon(onClick = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                     Icon(Icons.Default.PhotoLibrary, contentDescription = "Foto aus Galerie")
                 }
-                if (hasPermission) {
-                    RoundIcon(onClick = { vm.setTorch(!state.torchOn) }) {
-                        Icon(if (state.torchOn) Icons.Default.FlashOn else Icons.Default.FlashOff, contentDescription = "Licht")
+                if (hasPermission && cameraReady && controller.cameraInfo?.hasFlashUnit() == true) {
+                    RoundIcon(onClick = { runCatching { controller.enableTorch(!torchOn) } }) {
+                        Icon(
+                            if (torchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                            contentDescription = if (torchOn) "Licht ausschalten" else "Licht einschalten",
+                        )
                     }
                 }
             }
@@ -202,7 +255,7 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
             if (hasPermission) {
                 Surface(color = Color.Black.copy(alpha = 0.55f), contentColor = Color.White, shape = RoundedCornerShape(50)) {
                     Text(
-                        state.status,
+                        cameraError ?: state.status,
                         style = MaterialTheme.typography.labelLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -235,7 +288,7 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 Spacer(Modifier.height(10.dp))
             }
             if (hasPermission) {
-                ShutterButton(busy = state.busy, onClick = takePhoto)
+                ShutterButton(busy = state.busy || !cameraReady, onClick = takePhoto)
             }
         }
     }
@@ -273,22 +326,35 @@ private fun createController(
     previewResolutionSelector = ResolutionSelector.Builder()
         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
         .build()
+    // Fotos: gross genug fuer die Texterkennung, aber nicht volle Sensoraufloesung (Speicher/Tempo)
     imageCaptureResolutionSelector = ResolutionSelector.Builder()
         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+        .setResolutionStrategy(
+            ResolutionStrategy(Size(2560, 1440), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+        )
         .build()
     imageCaptureMode = ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
     setImageAnalysisAnalyzer(executor, vm.recognizer.analyzer { lines, w, h -> vm.onFrame(lines, w, h) })
 }
 
 @Composable
-private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraController, torchOn: Boolean, detected: Boolean) {
+private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraController, detected: Boolean, onError: (String) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
 
     DisposableEffect(lifecycleOwner) {
-        controller.bindToLifecycle(lifecycleOwner)
+        try {
+            controller.bindToLifecycle(lifecycleOwner)
+        } catch (e: Exception) {
+            onError("Keine passende Kamera gefunden – nutze die Galerie.")
+        }
         onDispose { controller.unbind() }
     }
-    LaunchedEffect(torchOn) { runCatching { controller.enableTorch(torchOn) } }
+    // ML Kit soll Koordinaten im Hochformat der Vorschau liefern (App ist auf Hochformat fixiert),
+    // auch wenn das Handy gedreht wird -> feste Drehung = Sensorausrichtung
+    LaunchedEffect(controller) {
+        while (controller.cameraInfo == null) kotlinx.coroutines.delay(100)
+        vm.recognizer.fixedRotationDegrees = controller.cameraInfo?.sensorRotationDegrees
+    }
 
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -496,23 +562,32 @@ private fun CandidateRow(item: CardItem, settings: AppSettings, isBest: Boolean,
 }
 
 @Composable
-private fun NoPermission(onRequest: () -> Unit) = CompositionLocalProvider(LocalContentColor provides Color.White) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(Icons.Default.CameraAlt, null, Modifier.size(64.dp))
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "Zum Scannen braucht die App Zugriff auf die Kamera. Die Bilder werden nur auf deinem Handy ausgewertet.",
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onRequest) { Text("Kamera erlauben") }
-        Spacer(Modifier.height(8.dp))
-        Text("Alternativ: Foto aus der Galerie (Symbol oben rechts)", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+private fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit) =
+    CompositionLocalProvider(LocalContentColor provides Color.White) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.Default.CameraAlt, null, Modifier.size(64.dp))
+            Spacer(Modifier.height(16.dp))
+            Text(
+                if (permanentlyDenied) {
+                    "Der Kamerazugriff wurde abgelehnt. Erlaube ihn in den App-Einstellungen unter „Berechtigungen“, um Karten zu scannen."
+                } else {
+                    "Zum Scannen braucht die App Zugriff auf die Kamera. Die Bilder werden nur auf deinem Handy ausgewertet."
+                },
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            if (permanentlyDenied) {
+                Button(onClick = onOpenSettings) { Text("Einstellungen öffnen") }
+            } else {
+                Button(onClick = onRequest) { Text("Kamera erlauben") }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Alternativ: Foto aus der Galerie (Symbol oben rechts)", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+        }
     }
-}
