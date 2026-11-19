@@ -11,3 +11,6 @@
 *.keystore
 !debug.keystore
 .kotlin/
+
+# Arbeitsordner von Hilfs-Agenten
+.claude/worktrees/
