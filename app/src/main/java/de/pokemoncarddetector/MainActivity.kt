@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -105,6 +106,35 @@ private val tabs = listOf(
     Tab(Routes.STATS, "Werte", Icons.Default.Insights),
 )
 
+private val longestTabLabel = tabs.maxBy { it.label.length }.label
+
+/**
+ * Tab-Beschriftung, die bei grosser Schrift oder schmalen Handys etwas kleiner wird,
+ * statt abgeschnitten zu werden ("Wünsc…"). Die Groesse richtet sich nach der laengsten
+ * Beschriftung [fitFor], damit alle Tabs gleich gross beschriftet sind.
+ */
+@Composable
+internal fun NavLabel(text: String, fitFor: String = text) {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val base = androidx.compose.material3.LocalTextStyle.current.copy(letterSpacing = 0.sp)
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        val maxPx = constraints.maxWidth
+        var size = if (base.fontSize.isSp) base.fontSize else 12.sp
+        while (size.value > 7f &&
+            measurer.measure(fitFor, base.copy(fontSize = size), softWrap = false, maxLines = 1).size.width > maxPx
+        ) {
+            size = (size.value - 0.5f).sp
+        }
+        Text(
+            text,
+            style = base.copy(fontSize = size),
+            maxLines = 1,
+            softWrap = false,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun MainScaffold() {
     val nav = rememberNavController()
@@ -121,7 +151,7 @@ private fun MainScaffold() {
                         selected = selected,
                         onClick = { nav.switchTab(tab.route) },
                         icon = { Icon(tab.icon, contentDescription = null) },
-                        label = { Text(tab.label, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                        label = { NavLabel(tab.label, fitFor = longestTabLabel) },
                     )
                 }
             }
