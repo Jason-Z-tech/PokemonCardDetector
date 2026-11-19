@@ -132,100 +132,34 @@ class CatalogSync(
         onStatus("Daten werden gespeichert …", null)
         store.write(series, toWrite, removeMissing = true)
 
-        // Japanische Sets: neue oder gewachsene Sets nachladen
-        val ja = runCatching { syncJapanese(known, onStatus) }.getOrNull()
+        // Japanische Sets: neue oder gewachsene Sets nachladen (Fehler der Liste zaehlt als ein Set)
+        val ja = try {
+            syncJapanese(known, onStatus)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
         Result(
-            newSets = toWrite.count { it.meta.id !in known } + (ja?.first ?: 0),
-            updatedSets = toWrite.count { it.meta.id in known } + (ja?.second ?: 0),
-            totalSets = allIds.size + (ja?.third ?: 0),
-            failedSets = failed.get() + (if (ja == null) 1 else 0),
+            newSets = toWrite.count { it.meta.id !in known } + (ja?.newSets ?: 0),
+            updatedSets = toWrite.count { it.meta.id in known } + (ja?.updatedSets ?: 0),
+            totalSets = allIds.size + (ja?.totalSets ?: 0),
+            failedSets = failed.get() + (ja?.failedSets ?: 1),
         )
     }
 
-    /** @return (neue Sets, aktualisierte Sets, Sets insgesamt) */
+    /** Japanische Sets abgleichen (siehe [JapaneseCatalogSync]) und nur wirklich geaenderte speichern. */
     private suspend fun syncJapanese(
         known: Map<String, de.pokemoncarddetector.data.db.SetEntity>,
         onStatus: (String, Float?) -> Unit,
-    ): Triple<Int, Int, Int> {
-        val list = getArray("ja/sets").mapNotNull { it as? JsonObject }
-        val changed = list.filter { o ->
-            val id = o.str("id") ?: return@filter false
-            val k = known["ja:$id"] ?: return@filter o.total() > 0
-            o.total() > k.cardCount
+    ): JapaneseCatalogSync.Outcome {
+        val dao = db.catalogDao()
+        val out = JapaneseCatalogSync(client, germanSpecies).run(known, { dao.cardsOfSet(it) }, onStatus)
+        if (out.payloads.isNotEmpty()) {
+            onStatus("Japanische Daten werden gespeichert …", null)
+            store.write(out.series, out.payloads, removeMissing = false)
         }
-        if (changed.isEmpty()) return Triple(0, 0, list.size)
-        val species = germanSpecies()
-        val payloads = mutableListOf<SetPayload>()
-        val seriesNames = getArray("ja/series").mapNotNull { it as? JsonObject }
-            .associate { (it.str("id") ?: "") to (it.str("name") ?: "") }
-        changed.forEachIndexed { i, o ->
-            val sid = o.str("id") ?: return@forEachIndexed
-            onStatus("Japanische Sets werden geladen … (${i + 1}/${changed.size})", (i + 1f) / changed.size)
-            val detail = runCatching { getObjectWithRetry("ja/sets/$sid") }.getOrNull() ?: return@forEachIndexed
-            val cards = (detail["cards"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-            if (cards.isEmpty()) return@forEachIndexed
-            val existing = db.catalogDao().cardsOfSet("ja:$sid").associateBy { it.localId }
-            val semaphore = Semaphore(6)
-            val rows = coroutineScope {
-                cards.map { c ->
-                    async {
-                        semaphore.withPermit {
-                            val lid = c.str("localId") ?: return@withPermit null
-                            val cd = runCatching { getObjectWithRetry("ja/cards/${sid}-$lid") }.getOrNull()
-                            val old = existing[lid]
-                            val name = c.str("name").orEmpty()
-                            val dex = (cd?.get("dexId") as? JsonArray).orEmpty()
-                                .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.intOrNull }
-                            CatalogCard(
-                                localId = lid,
-                                name = name,
-                                nameEn = old?.nameEn?.takeIf { it.isNotBlank() } ?: germanHint(name, dex, species),
-                                flags = if (c.containsKey("image")) 16 else (old?.imageFlags ?: 0),
-                                variants = (cd?.get("variants_detailed") as? JsonArray).orEmpty()
-                                    .mapNotNull { (it as? JsonObject)?.let(::variantKey) }.distinct()
-                                    .ifEmpty { old?.variants?.let { Variants.list(it) }.orEmpty() },
-                                hp = (cd?.get("hp") as? kotlinx.serialization.json.JsonPrimitive)?.intOrNull ?: old?.hp ?: 0,
-                                regulationMark = cd?.str("regulationMark") ?: old?.regulationMark.orEmpty(),
-                                rarity = cd?.str("rarity")?.takeIf { it != "None" } ?: old?.rarity.orEmpty(),
-                            )
-                        }
-                    }
-                }.awaitAll().filterNotNull()
-            }
-            val serie = (detail["serie"] as? JsonObject)?.str("id") ?: "misc"
-            val count = detail["cardCount"] as? JsonObject
-            payloads += SetPayload(
-                CatalogSet(
-                    id = "ja:$sid",
-                    name = detail.str("name") ?: sid,
-                    nameEn = detail.str("name") ?: sid,
-                    serie = "ja:$serie",
-                    release = detail.str("releaseDate").orEmpty(),
-                    abbr = sid,
-                    official = count?.get("official")?.jsonPrimitive?.intOrNull ?: 0,
-                    total = count?.get("total")?.jsonPrimitive?.intOrNull ?: rows.size,
-                    de = false,
-                    logo = detail.str("logo").orEmpty(),
-                    symbol = detail.str("symbol").orEmpty(),
-                    img = sid,
-                ),
-                rows.sortedWith(compareBy(naturalCardOrder()) { it.localId }),
-            )
-        }
-        val series = payloads.map { it.meta.serie }.distinct().map { id ->
-            CatalogSerie(id, seriesNames[id.removePrefix("ja:")] ?: id.removePrefix("ja:"), seriesNames[id.removePrefix("ja:")] ?: id)
-        }
-        store.write(series, payloads, removeMissing = false)
-        return Triple(payloads.count { "ja:" + it.meta.id.removePrefix("ja:") !in known }, payloads.count { it.meta.id in known }, list.size)
-    }
-
-    /** Deutscher Hinweis fuer eine japanische Karte (wie tools/build_catalog.py, vereinfacht). */
-    private fun germanHint(nameJa: String, dex: List<Int>, species: Map<Int, String>): String {
-        val names = dex.mapNotNull { species[it] }
-        if (names.isEmpty()) return ""
-        val suffix = listOf("VMAX" to " VMAX", "VSTAR" to " VSTAR", "GX" to "-GX", "EX" to "-EX", "ex" to " ex", "V" to " V")
-            .firstOrNull { nameJa.endsWith(it.first) }?.second.orEmpty()
-        return names.joinToString(" & ") + suffix
+        return out
     }
 
     private fun buildPayload(
