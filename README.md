@@ -17,7 +17,17 @@ und legt sie in deiner Sammlung ab – sortiert nach Serien und Sets (z. B. *Far
 - **Bilder an/aus** – Umschalter oben rechts (Textansicht spart mobile Daten).
 - **Suche** nach Name oder Nummer, um Karten auch ohne Scan hinzuzufügen.
 - **Automatisch hinzufügen** (optional): erkannte Karten landen ohne Tippen in der Sammlung.
-- **Sicherung** der Sammlung als JSON-Datei und Wiederherstellen.
+- **Varianten**: Normal, Holo, Reverse Holo, Pokéball-/Meisterball-Reverse, 1. Edition, schattenlos usw. –
+  die Anzahl wird je Variante gezählt.
+- **Japanische Karten**: 121 japanische Sets (über 13.000 Karten) mit deutschem Namenshinweis
+  (z. B. „リザードンex (Glurak ex)“). Sammlung umschaltbar *International / Japanisch*, Scanner mit japanischer Texterkennung.
+- **Cardmarket-Preise**: Trendpreis, 30-Tage-Durchschnitt oder Ab-Preis je Variante. Die Preise kommen über TCGdex
+  von Cardmarket (dort täglich aktualisiert) und werden beim Start, beim Öffnen einer Karte und einmal täglich im
+  Hintergrund aktualisiert.
+- **Statistik**: Wert der Sammlung mit Veränderung, Wertverlauf, wertvollste Karten, Wert je Serie,
+  Exemplare je Variante, Karten je Seltenheit.
+- **Wunschliste**: Herz in den Kartendetails; Liste mit Preisen und Gesamtkosten der fehlenden Karten.
+- **Sicherung** der Sammlung (inkl. Wunschliste) als JSON-Datei und Wiederherstellen.
 - **Offline-fähig**: Der komplette Kartenkatalog ist in der App enthalten, die Texterkennung läuft auf dem Handy
   (Google ML Kit). Nur die Kartenbilder werden aus dem Internet geladen und danach zwischengespeichert.
   Neue Sets: *Einstellungen → Neue Sets herunterladen*.
@@ -60,9 +70,11 @@ python3 tools/build_catalog.py
 
 ## Technik
 
-Kotlin · Jetpack Compose (Material 3) · CameraX · ML Kit Text Recognition · Room · DataStore · Coil · OkHttp
+Kotlin · Jetpack Compose (Material 3) · CameraX · ML Kit Text Recognition (lateinisch + japanisch) · Room · DataStore ·
+WorkManager · Coil · OkHttp
 
-Kartendaten und -bilder: [TCGdex](https://tcgdex.dev) (freie Pokémon-TCG-Datenbank).
+Kartendaten, -bilder und Preise: [TCGdex](https://tcgdex.dev) (freie Pokémon-TCG-Datenbank); die Preise stammen
+von [Cardmarket](https://www.cardmarket.com). Preise sind Richtwerte, keine Kaufangebote.
 
 *Pokémon und alle zugehörigen Namen sind Marken von Nintendo, Creatures Inc. und GAME FREAK inc.
 Dieses Projekt ist ein privates Fan-Projekt ohne Verbindung zu diesen Unternehmen.*
