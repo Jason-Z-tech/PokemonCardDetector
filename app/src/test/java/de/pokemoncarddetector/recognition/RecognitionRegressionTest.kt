@@ -213,6 +213,8 @@ class RecognitionRegressionTest {
             listOf("Icognito K K60" to 48, "68/132" to 12) to "dp3-68",
             listOf("Icognito K K6O" to 48, "68/132" to 12) to "dp3-68",
             listOf("Icognito K KP 6O W" to 48, "68/132" to 12) to "dp3-68",
+            // KP-Zahl ohne gelesenes "KP": "pantimos40" ist Pantimos mit KP 40, nicht "Pantimos 4" (pl2-28)
+            listOf("BASIS" to 18, "Pantimos 40" to 48, "6/64" to 12, "©1999 Pokémon" to 10) to "base2-6",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
@@ -225,6 +227,9 @@ class RecognitionRegressionTest {
         // ... ebenso ein Buchstabe ohne Zahl dahinter: "Icognito K" ist nicht das einfache Icognito 30/98
         val k = matcher.match(lines("BASIS" to 18, "Icognito K" to 48, "30/98" to 12, "©2015 Pokémon" to 10))
         assertFalse(k.show(), k.confident)
+        // ... und eine Ziffer, die nicht zur KP-Zahl gehoert: "Pantimos 4 KP 40" ist nicht das einfache Pantimos
+        val p = matcher.match(lines("BASIS" to 18, "Pantimos 4 KP 40" to 48, "6/64" to 12, "©1999 Pokémon" to 10))
+        assertFalse(p.show(), p.confident)
     }
 
     @Test
@@ -308,6 +313,55 @@ class RecognitionRegressionTest {
             val r = matcher.match(lines("PHASE 2" to 18, name to 48, "025/185" to 12, "©2020 Pokémon" to 10))
             assertFalse(r.show(), r.confident)
         }
+    }
+
+    @Test
+    fun stufeAlterKartenIstKeinBuchstabeDesNamens() {
+        // "Icognito ! LV.35" ergibt normalisiert "icognitolv35": darin steckt "Icognito L" (dp4-91, neo4-86). Das L
+        // gehoert zur Stufe, nicht zum Namen; die Karte bleibt sicher wie auf 68f0229. Ebenso mit KP-Lesefehler
+        // dahinter, mit KP in eigener Zeile, auf Englisch und mit dem L der Stufe als "w" gelesen (echte OCR liest
+        // "Gastly LV.12" als "Gastly wv.12")
+        val cases = listOf(
+            listOf("Icognito ! LV.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("Icognito ? LV.35 KP 70" to 48, "82/146" to 12, "©2008 Pokémon" to 10) to "dp6-82",
+            listOf("Icognito ! LV.35 K50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("Icognito ! LV.35" to 48, "KP 50" to 14, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("Icognito ! wv.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            listOf("BASIC" to 18, "Unown ! LV.35 HP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: der Buchstabe L vor der Stufe ist gelesen, das ist nicht das einfache "Icognito !"
+        val l = matcher.match(lines("Icognito L LV.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10))
+        assertFalse(l.show(), l.confident && l.best?.card?.id == "dp6-42")
+    }
+
+    @Test
+    fun stufeVorDemNamenIstKeinTeilDesNamens() {
+        // Ab SM steht die Stufe links vom Namen in derselben Zeile, die OCR liest oft beides als eine Zeile.
+        // "basispikachu" enthaelt "spikachu" (S Pikachu, basep-24), "basiswoobat" enthaelt "swoobat" (Swoobat):
+        // beide beginnen mitten in "BASIS" und widersprechen dem einfachen Namen nicht
+        val cases = listOf(
+            listOf("BASIS Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("BASIS) Pikachu" to 48, "KP 60" to 14, "025/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-025",
+            listOf("BASIS Pikachu KP70" to 48, "54/214" to 12, "©2019 Pokémon" to 10) to "sm10-54",
+            listOf("BASIS Pikachu" to 48, "051/162" to 12, "©2024 Pokémon" to 10) to "sv05-051",
+            listOf("BASIS Pikachu KP 70" to 48, "049/195" to 12, "©2022 Pokémon" to 10) to "swsh12-049",
+            listOf("BASIS Woobat KP 60" to 48, "7/12" to 12, "©2012 Pokémon" to 10) to "2012bw-7",
+            // pop5-13 "Pikachu δ" hat dieselbe Nummer und Gesamtzahl: er darf das einfache Pikachu nicht verdraengen
+            listOf("BASIS Pikachu KP 50" to 48, "13/17" to 12, "©2006 Pokémon" to 10) to "pop4-13",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: ein laengerer Name direkt hinter der Stufe widerspricht weiter ("Mewtu" ist nicht Mew-ex)
+        val m = matcher.match(lines("BASIS Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
+        assertFalse(m.show(), m.confident)
     }
 
     @Test

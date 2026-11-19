@@ -169,9 +169,14 @@ class CardMatcher(private val index: CatalogIndex) {
         /**
          * Typische Fehllesungen der KP-Angabe direkt vor der Zahl: "K60", "H6O", "xP60", "KF60", "KR60", "HF60".
          * Nicht in [HP_MARK], weil ein einzelner Buchstabe vor Ziffern auch das Namensende sein kann
-         * ("Glurak BREAK 170"), siehe [hpLetter].
+         * ("Glurak BREAK 170"), siehe [markLetter].
          */
         val HP_MISREAD = Regex("(?:kp|hp|xp|kf|kr|hf|[khp])$HP_NUMBER")
+        /**
+         * Entwicklungsstufe, die links vom Namen in derselben Zeile steht (SM- bis ME-Layout): "BASIS Pikachu",
+         * "PHASE1} Arbok", "BASIC ...", "STAGE 1 ...". Siehe [inStageLabel].
+         */
+        val STAGE_LABEL = Regex("basis|basic|phase|stage")
     }
 
     fun match(lines: List<OcrLine>): MatchResult = match(CardTextParser.parse(lines))
@@ -331,6 +336,9 @@ class CardMatcher(private val index: CatalogIndex) {
      * Kein anderer Name ist ein Teil des eigenen Kartennamens [own]: "Pikachu V" in "Pikachu VMAX" ist dessen
      * unvollstaendig gelesenes Logo, kein Widerspruch.
      * Die KP-Angabe zaehlt nicht zum Namen: "Icognito KP 60" ist nicht "Icognito K", auch nicht "Icognito K60".
+     * Ebenso wenig die Entwicklungsstufe davor und die Stufe (LV.) dahinter: "BASIS Pikachu" ist nicht "S Pikachu",
+     * "Icognito ! LV.35" nicht "Icognito L" ([inStageLabel], [markLetter]). Ein Name endet auch nicht mitten in einer
+     * Zahl: "Pantimos 40" ist Pantimos mit KP 40, nicht "Pantimos 4" ([endsInNumber]).
      * Nur wenn der andere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
      * ("Wenn du M-Simsala-EX ... spielst" auf Simsala-EX) oder bildet zufaellig einen Namen ("Icognito Schrift").
      */
@@ -345,7 +353,7 @@ class CardMatcher(private val index: CatalogIndex) {
         fun logoLonger(other: String) = other.startsWith(name) && other.substring(name.length) in IndexCard.LOGOS_NORM
         val longer = contained.of(core).any {
             it.length > name.length && spansLine(it.length) && it.contains(name) && foreign(it) &&
-                !logoLonger(it) && !hpLetter(core, it, name)
+                !logoLonger(it) && !markLetter(core, it, name) && !inStageLabel(core, it) && !endsInNumber(core, it)
         }
         // Fremdes Logo ab Position p hinter [name] an Position start, auch mit Zahl dahinter. Es beginnt direkt nach
         // [name], oder [name] endet selbst auf ein Logo und die Zeile verlaengert es ("pikachuv" in "pikachuvmax").
@@ -403,12 +411,36 @@ class CardMatcher(private val index: CatalogIndex) {
     }
 
     /**
-     * [other] ist [name] plus ein Buchstabe, der in [core] zur falsch gelesenen KP-Angabe gehoert:
-     * "Icognito K60" ist "Icognito KP 60", nicht Icognito K ([HP_MISREAD]).
+     * [other] ist [name] plus ein Buchstabe, der in [core] zu einer Angabe hinter dem Namen gehoert:
+     * - zur falsch gelesenen KP-Angabe ([HP_MISREAD]): "Icognito K60" ist "Icognito KP 60", nicht Icognito K;
+     * - zur Stufe aelterer Karten, also vor "v" und Ziffer ("LV.35", das L auch als "w" gelesen: "wv.12"):
+     *   "Icognito ! LV.35" ("!" faellt beim Normalisieren weg) ist nicht Icognito L. Kein Katalogname enthaelt
+     *   "v" mit Ziffer dahinter.
      */
-    private fun hpLetter(core: String, other: String, name: String): Boolean =
+    private fun markLetter(core: String, other: String, name: String): Boolean =
         other.length == name.length + 1 && other.startsWith(name) &&
-            occurrences(core, other).any { i -> HP_MISREAD.find(core, i + name.length)?.range?.first == i + name.length }
+            occurrences(core, other).any { i ->
+                val at = i + name.length
+                HP_MISREAD.find(core, at)?.range?.first == at ||
+                    (core.getOrNull(at + 1) == 'v' && core.getOrNull(at + 2) in '0'..'9')
+            }
+
+    /**
+     * Jedes Vorkommen von [other] in [core] beginnt mitten in einer Stufen-Angabe ([STAGE_LABEL]): "spikachu"
+     * (S Pikachu) in "basispikachu" ist BASIS + Pikachu, "swoobat" in "basiswoobat" BASIS + Woobat. Ein Name, der
+     * mit der Stufe beginnt ("Basis-Feuerenergie"), zaehlt weiter.
+     */
+    private fun inStageLabel(core: String, other: String): Boolean {
+        val labels = STAGE_LABEL.findAll(core).map { it.range }.toList()
+        return labels.isNotEmpty() && occurrences(core, other).all { i -> labels.any { i > it.first && i <= it.last } }
+    }
+
+    /**
+     * Jedes Vorkommen von [other] in [core] endet mitten in einer Zahl: "pantimos4" (Pantimos 4) in "pantimos40"
+     * ist Pantimos mit KP 40, deren "KP" nicht gelesen ist.
+     */
+    private fun endsInNumber(core: String, other: String): Boolean =
+        other.last() in '0'..'9' && occurrences(core, other).all { i -> core.getOrNull(i + other.length) in '0'..'9' }
 
     /** Teile einer normalisierten Zeile ohne die KP-Angabe ("glurakkp170" -> "glurak"). */
     private fun nameParts(line: String): List<String> = line.split(HP_MARK)
