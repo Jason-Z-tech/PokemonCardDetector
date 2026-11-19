@@ -19,6 +19,8 @@ data class CollectorNumber(
     val total: Int?,
     /** Original-Ausschnitt aus dem OCR-Text (zur Anzeige/Fehlersuche). */
     val raw: String,
+    /** true = nur geraten (Schraegstrich fehlt / als 1 gelesen) – zaehlt nur zusammen mit passendem Namen */
+    val weak: Boolean = false,
 ) {
     val key: String get() = CardTextParser.normalizeLocalId(number)
 }
@@ -51,7 +53,7 @@ object CardTextParser {
      * Erlaubt Leerzeichen um den Schraegstrich und typische OCR-Verwechsler (O statt 0, I/l statt 1).
      */
     private val SLASH_NUMBER = Regex(
-        "(?<![A-Z0-9])([A-Z]{1,4})?\\s?([$CONFUSABLE_DIGITS]{1,3}[A-Z]?)\\s?[/⁄∕]\\s?([A-Z]{1,4})?\\s?([$CONFUSABLE_TOTAL]{1,3})(?![0-9])"
+        "(?<![A-Z0-9])([A-Z]{1,4})?\\s?([$CONFUSABLE_DIGITS]{1,3}[A-Z]?)\\s?[/⁄∕]\\s?([A-Z]{1,4})?\\s?([$CONFUSABLE_TOTAL]{1,4})(?![0-9])"
     )
 
     /** Promos ohne Gesamtzahl: SWSH050, SM210, XY123, BW95, DP45, HGSS18 */
@@ -69,11 +71,18 @@ object CardTextParser {
     /** Schraegstrich nicht erkannt: "025I185", "025|185", "025 185" (nur 3+3 Ziffern, sonst zu unsicher). */
     private val MISSING_SLASH = Regex("(?<![0-9])([0-9]{3})(?:\\s?[IL|\\\\]\\s?|\\s)([0-9]{3})(?![0-9])")
 
+    /** Ziffernfolge, in der der Schraegstrich fehlt oder als 1/I/l gelesen wurde ("020078", "941149", "691110"). */
+    private val NO_SLASH_RUN = Regex("(?<![0-9A-Z])[0-9][0-9LI|]{3,6}(?![0-9A-Z])")
+
+    /** Regelzeichen (D-J) direkt vor dem Kuerzel: "GSVP", "HPAL" */
+    private fun withoutRegulationMark(code: String): String? =
+        if (code.length == 4 && code[0] in 'D'..'J' && code.drop(1).all { it.isLetter() }) code.drop(1) else null
+
     /** Tokens, die wie Set-Kuerzel aussehen, aber auf jeder Karte stehen (Kraftpunkte). */
     private val NOT_A_SET_CODE = setOf("HP", "KP", "PV", "PS", "LV", "DE", "EN")
 
     /** Promo-Nummer neben Set-Kuerzel (SVP/MEP haben keine Gesamtzahl), z.B. "SVP DE 049". */
-    private val CODE_PROMO_NUMBER = Regex("(?<![A-Z0-9])(SVP|MEP)\\s?[•·.]?\\s?(?:(?:DE|EN|FR|IT|ES|PT|NL)\\s?)?([0-9]{1,3})(?![0-9/])")
+    private val CODE_PROMO_NUMBER = Regex("(?<![\\p{L}0-9])[D-J]?(S[VY]P|MEP)\\s?[•·.]?\\s?(?:(?:DE|EN|FR|IT|ES|PT|NL)\\s?)?([0-9]{1,3})(?![0-9/])")
 
     /** "KP 170", "KP170", "170 KP", "HP 170", "PV 170" */
     private val HP = Regex("(?<![A-Z0-9])(?:KP|HP|PV|PS)\\s?([0-9]{2,3})(?![0-9])|(?<![0-9])([0-9]{2,3})\\s?(?:KP|HP|PV|PS)(?![A-Z])")
@@ -127,6 +136,9 @@ object CardTextParser {
         val candidatesText = ArrayList<String>(texts.size * 2)
         candidatesText += texts
         for (i in 0 until texts.size - 1) candidatesText += texts[i] + " " + texts[i + 1]
+        // Kaestchen auf gleicher Hoehe links->rechts verbinden ("GSVP DE" + "021", "Energy" + "Switch")
+        val rowLines = rows(lines)
+        candidatesText += rowLines.map { it.text }
 
         for (raw in candidatesText) {
             val up = raw.uppercase()
@@ -152,7 +164,11 @@ object CardTextParser {
                 val numDigits = toDigits(num.dropLast(suffix.length))
                 val totalDigits = toDigits(total)
                 if (!numDigits.all { it.isDigit() } || !totalDigits.all { it.isDigit() }) continue
-                val totalInt = totalDigits.toIntOrNull() ?: continue
+                // Seltenheitssymbol hinter der Gesamtzahl als Ziffer gelesen: "36/1140" -> 36/114, "12/640" -> 12/64
+                var totalStr = totalDigits
+                if (totalStr.length == 4) totalStr = totalStr.take(3)
+                if ((totalStr.toIntOrNull() ?: 0) > 500 && totalStr.length == 3) totalStr = totalStr.take(2)
+                val totalInt = totalStr.toIntOrNull() ?: continue
                 if (totalInt <= 0 || totalInt > 500) continue
                 // Praefix nur behalten, wenn es auch vor der Gesamtzahl steht (TG05/TG30) oder bekannt ist.
                 val keepPrefix = when {
@@ -164,6 +180,11 @@ object CardTextParser {
                 val number = keepPrefix + numDigits + suffix
                 val key = "$number/$totalInt"
                 if (key !in numbers) numbers[key] = CollectorNumber(number, totalInt, m.value.trim())
+                // Bekanntes Praefix ohne Wiederholung vor der Gesamtzahl kann Rest eines Kuerzels sein ("PAR 063" -> "AR063")
+                if (keepPrefix.isNotEmpty() && keepPrefix != totalPrefix) {
+                    val plainKey = "${numDigits + suffix}/$totalInt"
+                    if (plainKey !in numbers) numbers[plainKey] = CollectorNumber(numDigits + suffix, totalInt, m.value.trim())
+                }
             }
             for (m in PROMO_NUMBER.findAll(up)) {
                 val number = m.groupValues[1] + m.groupValues[2]
@@ -172,12 +193,16 @@ object CardTextParser {
                 }
             }
             for (m in CODE_PROMO_NUMBER.findAll(up)) {
-                codes += m.groupValues[1]
+                val code = m.groupValues[1].replace('Y', 'V') // "SYP" = OCR-Fehler fuer "SVP"
+                codes += code
                 val number = m.groupValues[2]
-                val key = "${m.groupValues[1]}:$number"
+                val key = "$code:$number"
                 if (key !in numbers) numbers[key] = CollectorNumber(number, null, m.value.trim())
             }
-            for (m in CODE_BEFORE_LANG.findAll(up)) codes += m.groupValues[1]
+            for (m in CODE_BEFORE_LANG.findAll(up)) {
+                codes += m.groupValues[1]
+                withoutRegulationMark(m.groupValues[1])?.let { codes += it }
+            }
             for (m in CODE_BEFORE_NUMBER.findAll(up)) codes += m.groupValues[1]
         }
         codes.removeAll(NOT_A_SET_CODE)
@@ -198,7 +223,26 @@ object CardTextParser {
                     val total = m.groupValues[2].toInt()
                     if (total <= 0 || total > 500) continue
                     val key = "${m.groupValues[1]}/$total"
-                    if (key !in numbers) numbers[key] = CollectorNumber(m.groupValues[1], total, m.value.trim())
+                    if (key !in numbers) numbers[key] = CollectorNumber(m.groupValues[1], total, m.value.trim(), weak = true)
+                }
+            }
+        }
+        if (numbers.values.none { it.total != null }) {
+            for (raw in texts + rowLines.map { it.text }) {
+                if (COPYRIGHT_HINT.containsMatchIn(raw)) continue // "©2024" -> "02024"
+                for (m in NO_SLASH_RUN.findAll(raw.uppercase())) {
+                    val run = m.value
+                    val splits = ArrayList<Pair<String, String>>()
+                    for (i in 1..3) if (i < run.length && run[i] in "1LI|") splits += run.take(i) to run.substring(i + 1)
+                    if (run.length in 5..6) splits += run.take(3) to run.substring(3)
+                    for ((n, t) in splits) {
+                        if (n.isEmpty() || t.length !in 2..3 || !n.all { it.isDigit() } || !t.all { it.isDigit() }) continue
+                        val total = t.toInt()
+                        val num = n.toInt()
+                        if (total < 10 || total > 500 || num == 0 || num > total + 160) continue
+                        val key = "$n/$total"
+                        if (key !in numbers) numbers[key] = CollectorNumber(n, total, run, weak = true)
+                    }
                 }
             }
         }
@@ -218,10 +262,26 @@ object CardTextParser {
             numbers = numbers.values.toList(),
             setCodes = codes,
             years = years,
-            nameLines = nameLines(lines),
+            nameLines = nameLines(lines + rows(lines)),
             allLines = texts,
             hp = hp,
         )
+    }
+
+    /** Kaestchen mit vertikaler Ueberlappung (gleiche Zeile auf der Karte), von links nach rechts verbunden. */
+    private fun rows(lines: List<OcrLine>): List<OcrLine> {
+        val boxed = lines.filter { it.bottom > it.top && it.text.isNotBlank() }.sortedBy { it.top + it.bottom }
+        if (boxed.size < 2) return emptyList()
+        val groups = ArrayList<MutableList<OcrLine>>()
+        for (l in boxed) {
+            val g = groups.lastOrNull()
+            val joins = g != null && g.any { o -> minOf(o.bottom, l.bottom) - maxOf(o.top, l.top) > 0.5 * minOf(o.height, l.height) }
+            if (joins) g!!.add(l) else groups += mutableListOf(l)
+        }
+        return groups.filter { it.size > 1 }.map { g ->
+            val s = g.sortedBy { it.left }
+            OcrLine(s.joinToString(" ") { it.text.trim() }, s.minOf { it.left }, s.minOf { it.top }, s.maxOf { it.right }, s.maxOf { it.bottom })
+        }
     }
 
     /**

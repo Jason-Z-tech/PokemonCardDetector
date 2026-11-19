@@ -135,6 +135,7 @@ class CardMatcher(private val index: CatalogIndex) {
         const val W_NAME = 45.0
         const val W_YEAR = 8.0
         const val W_HP = 12.0
+        const val W_CLOSE_NUMBER = 10.0
         const val MAX_ALTERNATIVES = 8
     }
 
@@ -163,6 +164,8 @@ class CardMatcher(private val index: CatalogIndex) {
                 // Ohne passende Gesamtzahl/Kuerzel nur Promos (ohne Gesamtzahl) zulassen
                 if (!totalMatched && !codeMatched && num.total != null) continue
                 val nameScore = nameScore(parsed, card)
+                // Geratene Nummern (fehlender Schraegstrich) nur zusammen mit passendem Namen
+                if (num.weak && nameScore < 0.6) continue
                 offer(score(card, set, parsed, nameScore, numberMatched = true, totalMatched, codeMatched))
             }
         }
@@ -171,8 +174,10 @@ class CardMatcher(private val index: CatalogIndex) {
         val setsFromTotals = parsed.numbers.mapNotNull { it.total }.toSet()
             .flatMap { total -> index.setsById.values.filter { it.officialCount == total } }
             .map { it.id }
-        val fallbackSets = (setsFromTotals + codeSetIds).toSet()
-        val bestNumberName = candidates.values.maxOfOrNull { it.nameScore } ?: 0.0
+        val setsFromCandidates = candidates.values.filter { it.numberMatched && it.totalMatched }.map { it.set.id }
+        val fallbackSets = (setsFromTotals + codeSetIds + setsFromCandidates).toSet()
+        val bestNumberCandidate = candidates.values.maxByOrNull { it.nameScore }
+        val bestNumberName = bestNumberCandidate?.nameScore ?: 0.0
         if (fallbackSets.isNotEmpty()) {
             for (setId in fallbackSets) {
                 val set = index.setsById[setId] ?: continue
@@ -181,14 +186,20 @@ class CardMatcher(private val index: CatalogIndex) {
                     val ns = nameScore(parsed, card)
                     // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch gelesen)
                     if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
-                    val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) }
-                    offer(score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds))
+                    // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
+                    if (bestNumberCandidate != null && bestNumberName >= 0.8 && nested(card, bestNumberCandidate.card)) continue
+                    val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) } ||
+                        parsed.numbers.any { it.total == null && card.prefix.isNotEmpty() && it.key.takeWhile(Char::isLetter) == card.prefix }
+                    val c = score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds)
+                    // Eine Ziffer daneben ist der typische OCR-Fehler
+                    val close = parsed.numbers.any { TextNorm.levenshtein(it.key, card.key) <= 1 }
+                    offer(if (close) c.copy(score = c.score + W_CLOSE_NUMBER) else c)
                 }
             }
         }
 
-        // 3) Gar keine Nummer: nur ueber den Namen
-        if (candidates.isEmpty()) {
+        // 3) Keine (zum Namen passende) Nummer: nur ueber den Namen
+        if (candidates.values.none { it.nameScore >= 0.8 }) {
             val names = bestNames(parsed)
             for ((_, cards) in names) {
                 for (card in cards) {
@@ -278,9 +289,22 @@ class CardMatcher(private val index: CatalogIndex) {
             .map { it.key to index.cardsByName[it.key].orEmpty() }
     }
 
+    /** Ein Name ist im anderen enthalten ("Glurak EX" / "M-Glurak EX", "Olangaar" / "Olangaar VMAX"). */
+    /**
+     * true, wenn der Name von [shorter] im Namen von [longer] steckt ("Olangaar" in "Olangaar VMAX").
+     * Dann hat die OCR vermutlich nur das Logo (VMAX, V, EX ...) nicht gelesen – kein Grund fuer Zweifel.
+     * Umgekehrt (der Konkurrent erklaert MEHR gelesenen Text, z.B. "VMAX") bleibt es ein Warnsignal.
+     */
+    private fun nested(shorter: IndexCard, longer: IndexCard): Boolean {
+        fun n(x: String, y: String) = x.length >= 3 && y.length > x.length && y.contains(x)
+        return n(shorter.nameNorm, longer.nameNorm) || n(shorter.nameEnNorm, longer.nameEnNorm)
+    }
+
     private fun isConfident(best: MatchCandidate, second: MatchCandidate?, all: List<MatchCandidate>, parsed: ParsedCardText): Boolean {
         // Eine andere Karte passt per Name klar besser -> Nummer vermutlich falsch gelesen
-        if (all.any { !it.numberMatched && it.nameScore >= 0.8 && it.nameScore > best.nameScore + 0.02 }) return false
+        if (all.any { it !== best && it.nameScore >= 0.8 && it.nameScore > best.nameScore + 0.02 && !nested(it.card, best.card) }) return false
+        // Ohne lesbaren Namen nie sicher: eine falsch gelesene Ziffer ergibt sonst eine andere, gueltige Karte
+        if (best.nameScore < 0.8) return false
         // Copyright-Jahr deutlich nach Erscheinen des Sets -> Nachdruck (z.B. Celebrations Classic Collection)
         val year = parsed.maxYear
         val release = best.set.releaseYear
@@ -292,8 +316,6 @@ class CardMatcher(private val index: CatalogIndex) {
             best.numberMatched && best.totalMatched && strongName -> clearLead || best.nameScore - (second?.nameScore ?: 0.0) >= 0.2
             // Nummer + gedrucktes Set-Kuerzel (Karmesin & Purpur / Mega-Entwicklung)
             best.numberMatched && best.codeMatched && (best.totalMatched || strongName) -> clearLead
-            // Nummer + Gesamtzahl eindeutig (nur ein Set passt), Name unlesbar
-            best.numberMatched && best.totalMatched && all.count { it.numberMatched && it.totalMatched } == 1 -> best.nameScore >= 0.5
             else -> false
         }
     }

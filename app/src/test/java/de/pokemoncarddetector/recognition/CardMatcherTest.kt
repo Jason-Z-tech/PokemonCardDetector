@@ -1,7 +1,8 @@
 package de.pokemoncarddetector.recognition
 
 import de.pokemoncarddetector.data.catalog.CatalogFile
-import de.pokemoncarddetector.data.catalog.parsedCards
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,7 +32,7 @@ class CardMatcherTest {
                 IndexSet(it.id, it.name, it.nameEn, it.release.take(4).toIntOrNull(), it.abbr, it.official, it.total)
             }
             val cards = catalog.sets.flatMap { s ->
-                s.parsedCards(catalog.variants).map { c -> IndexCard("${s.id}-${c.localId}", s.id, c.localId, c.name, c.nameEn, c.hp) }
+                s.cards.filter { it.size >= 4 }.map { row -> IndexCard("${s.id}-${row[0].jsonPrimitive.content}", s.id, row[0].jsonPrimitive.content, row[1].jsonPrimitive.content, row[2].jsonPrimitive.content, row.getOrNull(5)?.jsonPrimitive?.intOrNull ?: 0) }
             }
             index = CatalogIndex(sets, cards)
             matcher = CardMatcher(index)
@@ -132,8 +133,30 @@ class CardMatcherTest {
     fun kuerzelEntscheidetBeiGleicherGesamtzahl() {
         // 198 = Schaurige Herrschaft (swsh6) und Karmesin & Purpur (sv01); ohne Namen entscheidet "SVI"
         val r = matcher.match(lines("xxxx" to 40, "SVI DE 050/198" to 12))
-        assertMatch("sv01-050", r)
+        // Ohne Namen nicht "sicher": "SVI DE 053/198" (eine Ziffer falsch) waere genauso gueltig
+        assertMatch("sv01-050", r, confident = false)
+        assertTrue(r.best!!.codeMatched)
     }
+
+    @Test
+    fun falscheZifferMitAehnlichemNamenIstNichtSicher() {
+        // hgss4-46 Nidorino mit Blendung: OCR liest "45/102" (= Nidorina)
+        val r = matcher.match(lines("Nidorino" to 48, "45/102" to 12, "©2011 Pokémon/Nintendo" to 10))
+        assertMatch("hgss4-46", r, confident = false)
+        assertFalse(r.confident)
+    }
+
+    @Test
+    fun geteilterNameUeberNummer() {
+        // ex6-90 "Energy Switch": OCR liefert "Switch" und "Energy" als zwei Kaestchen (Switch 9px hoeher)
+        val l = listOf(
+            OcrLine("TRAINER", 62, 76, 341, 148), OcrLine("Switch", 527, 122, 657, 177), OcrLine("Energy", 409, 131, 548, 184),
+            OcrLine("Move a basic Energy card attached to 1", 164, 666, 624, 728), OcrLine("90/112", 616, 922, 690, 950),
+            OcrLine("©2004 Pokemon/N", 325, 938, 454, 965),
+        )
+        assertMatch("ex6-90", matcher.match(l))
+    }
+
 
     @Test
     fun trainerGalerie() {

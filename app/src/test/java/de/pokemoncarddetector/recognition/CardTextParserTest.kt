@@ -83,4 +83,46 @@ class CardTextParserTest {
         assertTrue(TextNorm.nameSimilarity("gluruk", "glurak") > 0.8)
         assertTrue(TextNorm.nameSimilarity("bisasam", "glurak") < 0.5)
     }
+
+    // ---- Faelle aus echter OCR (RapidOCR PP-OCRv6 auf TCGdex-Kartenbildern) ----
+
+    @Test
+    fun seltenheitssymbolHinterGesamtzahl() {
+        // bw1-36: "36/114 ●" -> "36/1140"; xy10-117: "117/124 ★" -> "117/1245"
+        assertTrue(parse("36/1140").numbers.any { it.key == "36" && it.total == 114 })
+        assertTrue(parse("Illus. Ryo Ueda 117/1245").numbers.any { it.key == "117" && it.total == 124 })
+    }
+
+    @Test
+    fun schraegstrichFehltOderAlsEinsGelesen() {
+        // bw7-94: "94/149" -> "941149"; swsh10.5-020: "020/078" -> "020078"
+        val a = parse("941149").numbers
+        assertTrue(a.toString(), a.any { it.key == "94" && it.total == 149 && it.weak })
+        val b = parse("020078").numbers
+        assertTrue(b.toString(), b.any { it.key == "20" && it.total == 78 && it.weak })
+        // Copyright-Jahr ist keine Nummer
+        assertTrue(parse("02024 Pokémon/Nintendo").numbers.isEmpty())
+    }
+
+    @Test
+    fun kuerzelUndNummerAlsGetrennteKaestchen() {
+        // svp-021 (Foto): "021" liegt 3px hoeher als "GSVP DE" und kommt beim Sortieren nach top zuerst
+        val p = CardTextParser.parse(listOf(OcrLine("021", 179, 980, 264, 1018), OcrLine("GSVP DE", 114, 983, 195, 1016)))
+        assertTrue(p.setCodes.toString(), "SVP" in p.setCodes)
+        assertTrue(p.numbers.toString(), p.numbers.any { it.key == "21" && it.total == null })
+    }
+
+    @Test
+    fun abgeschnittenesKuerzelVorNummer() {
+        // sv04-063: "PAR 063/182" -> "AR063/182" (AR ist auch ein Nummern-Praefix)
+        assertTrue(parse("AR063/182").numbers.any { it.key == "63" && it.total == 182 })
+        // me01-065: "MEG 065/132" -> "MG06S/132"
+        assertTrue(parse("MG06S/132").numbers.any { it.key == "65" && it.total == 132 })
+    }
+
+    @Test
+    fun woerterSindKeineSetKuerzel() {
+        val p = parse("Viele verabscheuen und es glauben, es bringe Unglück", "Es lebt in dunklen Höhlen", "It flies at night")
+        assertTrue(p.setCodes.toString(), p.setCodes.none { it in setOf("UND", "HL", "FLI") })
+    }
 }
