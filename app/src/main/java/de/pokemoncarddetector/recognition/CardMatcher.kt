@@ -39,6 +39,8 @@ data class IndexCard(
     }
     /** Buchstaben-Praefix der Nummer, z.B. "TG" bei "TG05". */
     val prefix: String = key.takeWhile { it.isLetter() }
+    /** Platzhalter aus einem Set ohne Kartenliste: Nummer bekannt, Name unbekannt (nicht "falsch"). */
+    val isPlaceholder: Boolean = nameNorm.isEmpty() && nameEnNorm.isEmpty()
     /** Gedruckte Nummer, falls sie von der Katalog-Nummer abweicht (Nachdrucke, siehe [PrintedAliases]). */
     val alias: PrintedAliases.Alias? = PrintedAliases.of(id)
     val aliasNameNorm: String = alias?.let { TextNorm.normalize(it.nameDe) }.orEmpty()
@@ -155,11 +157,15 @@ class CardMatcher(private val index: CatalogIndex) {
         val knownCodes = parsed.setCodes.filter { index.setsByAbbreviation.containsKey(it) }.toSet()
         val codeSetIds = knownCodes.flatMap { index.setsByAbbreviation[it].orEmpty() }.map { it.id }.toSet()
         val candidates = HashMap<String, MatchCandidate>()
+        val contained = ContainedNames(index)
 
         fun offer(c: MatchCandidate) {
             val old = candidates[c.card.id]
             if (old == null || old.score < c.score) candidates[c.card.id] = c
         }
+
+        // Eine Ziffer daneben ist der typische OCR-Fehler
+        fun closeNumber(card: IndexCard) = parsed.numbers.any { TextNorm.levenshtein(it.key, card.key) <= 1 }
 
         // 1) Ueber die Sammlernummer
         for (num in parsed.numbers) {
@@ -171,12 +177,22 @@ class CardMatcher(private val index: CatalogIndex) {
                 val codeMatched = set.id in codeSetIds
                 // Ohne passende Gesamtzahl/Kuerzel nur Promos (ohne Gesamtzahl) zulassen
                 if (!totalMatched && !codeMatched && num.total != null) continue
-                val nameScore = nameScore(parsed, card)
+                val nameScore = nameScore(parsed, card, contained)
                 // Geratene Nummern (fehlender Schraegstrich) nur zusammen mit passendem Namen
                 if (num.weak && nameScore < 0.6) continue
                 offer(score(card, set, parsed, nameScore, numberMatched = true, totalMatched, codeMatched))
             }
         }
+
+        // Platzhalter (Set ohne Kartenliste) mit genau passender Nummer + Gesamtzahl: sein Name ist unbekannt und
+        // kann zur Zeile passen. Karten mit anderer Nummer sind dann nur eine Vermutung ("Nummer falsch gelesen")
+        // und duerfen nicht vorbeiziehen, ausser mit fast exaktem Namen oder einer Ziffer Abstand.
+        // Ein gelesenes Kuerzel eines anderen Sets widerspricht dem Platzhalter, dann gilt das nicht.
+        val placeholderScore = candidates.values
+            .filter { it.numberMatched && it.totalMatched && it.card.isPlaceholder && (codeSetIds.isEmpty() || it.codeMatched) }
+            .maxOfOrNull { it.score }
+        fun belowPlaceholder(c: MatchCandidate) =
+            placeholderScore != null && !c.numberMatched && c.nameScore < 0.95 && !closeNumber(c.card)
 
         // 2) Nummer evtl. falsch gelesen: Karten aus Sets mit passender Gesamtzahl/Kuerzel per Name suchen
         val setsFromTotals = parsed.numbers.mapNotNull { it.total }.toSet()
@@ -191,7 +207,7 @@ class CardMatcher(private val index: CatalogIndex) {
                 val set = index.setsById[setId] ?: continue
                 for (card in index.cardsBySet[setId].orEmpty()) {
                     if (card.id in candidates) continue
-                    val ns = nameScore(parsed, card)
+                    val ns = nameScore(parsed, card, contained)
                     // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch gelesen)
                     if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
                     // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
@@ -199,20 +215,19 @@ class CardMatcher(private val index: CatalogIndex) {
                     val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) } ||
                         parsed.numbers.any { it.total == null && card.prefix.isNotEmpty() && it.key.takeWhile(Char::isLetter) == card.prefix }
                     val c = score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds)
-                    // Eine Ziffer daneben ist der typische OCR-Fehler
-                    val close = parsed.numbers.any { TextNorm.levenshtein(it.key, card.key) <= 1 }
-                    offer(if (close) c.copy(score = c.score + W_CLOSE_NUMBER) else c)
+                    offer(if (closeNumber(card)) c.copy(score = c.score + W_CLOSE_NUMBER) else c)
                 }
             }
         }
 
-        // 3) Keine (zum Namen passende) Nummer: nur ueber den Namen
-        if (candidates.values.none { it.nameScore >= 0.8 }) {
-            val names = bestNames(parsed)
+        // 3) Keine (zum Namen passende) Nummer: nur ueber den Namen.
+        // Namens-Treffer, die hinter einem Platzhalter bleiben muessen, zaehlen dabei nicht als passend.
+        if (candidates.values.none { it.nameScore >= 0.8 && !belowPlaceholder(it) }) {
+            val names = bestNames(parsed, contained)
             for ((_, cards) in names) {
                 for (card in cards) {
                     val set = index.setsById[card.setId] ?: continue
-                    val ns = nameScore(parsed, card)
+                    val ns = nameScore(parsed, card, contained)
                     offer(score(card, set, parsed, ns, numberMatched = false, totalMatched = false, codeMatched = set.id in codeSetIds))
                 }
             }
@@ -220,8 +235,22 @@ class CardMatcher(private val index: CatalogIndex) {
 
         if (candidates.isEmpty()) return MatchResult.empty(parsed)
 
+        // Vermutungen hinter den Platzhalter schieben (alle um denselben Betrag, ihre Reihenfolge bleibt)
+        if (placeholderScore != null) {
+            val guesses = candidates.values.filter(::belowPlaceholder)
+            val top = guesses.maxOfOrNull { it.score }
+            if (top != null && top >= placeholderScore) {
+                val shift = top - placeholderScore + 1.0
+                for (c in guesses) candidates[c.card.id] = c.copy(score = c.score - shift)
+            }
+        }
+
+        // Bei Gleichstand: ist der Name sicher gelesen, widerspricht er einer anderen Karte mit derselben Nummer,
+        // einem Platzhalter (Name unbekannt) aber nicht
+        val nameRead = candidates.values.any { it.nameScore >= 0.95 }
         val sorted = candidates.values.sortedWith(
             compareByDescending<MatchCandidate> { it.score }
+                .thenByDescending { nameRead && it.card.isPlaceholder }
                 .thenByDescending { it.set.releaseYear ?: 0 }
         )
         val best = sorted.first()
@@ -238,18 +267,42 @@ class CardMatcher(private val index: CatalogIndex) {
         return set.officialCount == 0 && set.totalCount == total
     }
 
-    private fun nameScore(parsed: ParsedCardText, card: IndexCard): Double {
+    private fun nameScore(parsed: ParsedCardText, card: IndexCard, contained: ContainedNames): Double {
         var best = 0.0
         for (line in parsed.nameLines) {
-            var s = TextNorm.nameSimilarity(line, card.nameNorm)
-            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, TextNorm.nameSimilarity(line, card.nameEnNorm))
-            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * TextNorm.nameSimilarity(line, card.baseNorm))
-            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * TextNorm.nameSimilarity(line, card.baseEnNorm))
-            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, TextNorm.nameSimilarity(line, card.aliasNameNorm))
+            var s = similarity(line, card.nameNorm, contained)
+            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, similarity(line, card.nameEnNorm, contained))
+            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * similarity(line, card.baseNorm, contained))
+            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * similarity(line, card.baseEnNorm, contained))
+            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, similarity(line, card.aliasNameNorm, contained))
             if (s > best) best = s
             if (best >= 1.0) break
         }
         return best
+    }
+
+    /**
+     * Wie [TextNorm.nameSimilarity], mit einer Ausnahme: steht [name] nur als Teil eines laengeren Katalognamens
+     * in der Zeile ("リザード" in "リザードンEX", "Pikachu" in "Pikachu VMAX"), dann ist die Zeile dieser laengere
+     * Name und nicht [name] mit Zusatztext (wie "Glurak" in "Glurak KP 170"). Statt der Enthalten-Regel zaehlt dann
+     * nur die Aehnlichkeit der ganzen Zeile.
+     * Nur wenn der laengere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
+     * ("Wenn du M-Simsala-EX ... spielst" auf Simsala-EX) oder bildet zufaellig einen Namen ("Icognito Schrift").
+     */
+    private fun similarity(line: String, name: String, contained: ContainedNames): Double {
+        val s = TextNorm.nameSimilarity(line, name)
+        if (name.isEmpty() || name.length >= line.length || !line.contains(name)) return s
+        val longer = contained.of(line).any { it.length > name.length && it.length * 3 >= line.length && it.contains(name) }
+        return if (longer) minOf(s, TextNorm.ratio(line, name)) else s
+    }
+
+    /**
+     * Katalognamen, die woertlich in einer (normalisierten) Namenszeile stehen: "リザードンEX" enthaelt
+     * リザードンex, リザードン und リザード. Gilt fuer einen [match]-Aufruf, damit der Matcher zustandslos bleibt.
+     */
+    private class ContainedNames(private val index: CatalogIndex) {
+        private val cache = HashMap<String, List<String>>()
+        fun of(line: String): List<String> = cache.getOrPut(line) { index.nameCandidates(line).filter { line.contains(it) } }
     }
 
     private fun score(
@@ -283,13 +336,13 @@ class CardMatcher(private val index: CatalogIndex) {
         return MatchCandidate(card, set, s, nameScore, numberMatched, totalMatched, codeMatched)
     }
 
-    private fun bestNames(parsed: ParsedCardText): List<Pair<String, List<IndexCard>>> {
+    private fun bestNames(parsed: ParsedCardText, contained: ContainedNames): List<Pair<String, List<IndexCard>>> {
         val lines = parsed.nameLines.take(6).filter(TextNorm::isSearchableName)
         if (lines.isEmpty()) return emptyList()
         val best = HashMap<String, Double>()
         for (line in lines) {
             for (name in index.nameCandidates(line)) {
-                val s = TextNorm.nameSimilarity(line, name)
+                val s = similarity(line, name, contained)
                 if (s >= 0.82 && s > (best[name] ?: 0.0)) best[name] = s
             }
         }

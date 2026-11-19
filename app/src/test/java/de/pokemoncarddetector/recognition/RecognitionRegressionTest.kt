@@ -155,6 +155,45 @@ class RecognitionRegressionTest {
         assertEquals("Nummer 020/189 korrekt gelesen, aber ${r.show()}", "swsh3-20", r.best?.card?.id)
     }
 
+    // ---------- 4b) Name steckt nur als Teil eines laengeren Namens in der Zeile ----------
+
+    @Test
+    fun laengererNameMitFalscherZifferIstNichtSicherDieVorstufe() {
+        // M-Simsala-EX 118/124, OCR liest 117 (= Simsala-EX): "Simsala EX" steckt in "M-Simsala-EX"
+        val r = matcher.match(lines("M-Simsala-EX KP 210" to 48, "117/124" to 12, "©2016 Pokémon" to 10))
+        println("[mega] ${r.show()}")
+        assertFalse("M-Simsala-EX gelesen, trotzdem sicher ${r.show()}", r.confident && r.best?.card?.id == "xy10-117")
+        assertEquals(r.show(), "xy10-118", r.best?.card?.id)
+        // Mewtu V 030/078, OCR liest 031 (= Mewtu VSTAR): "Mewtu" (ohne Logo) steckt in "Mewtu V"
+        val v = matcher.match(lines("Mewtu V KP 220" to 48, "031/078" to 12, "©2022 Pokémon" to 10))
+        println("[vstar] ${v.show()}")
+        assertFalse("Mewtu V gelesen, trotzdem sicher ${v.show()}", v.confident && v.best?.card?.id == "swsh10.5-031")
+        assertEquals(v.show(), "swsh10.5-030", v.best?.card?.id)
+    }
+
+    @Test
+    fun fliesstextMitLaengeremNamenBleibtHinweis() {
+        // Name unlesbar; die Faehigkeit von Simsala-EX erwaehnt M-Simsala-EX. Das ist Fliesstext, keine Namenszeile:
+        // der darin enthaltene Name "Simsala EX" zaehlt weiter
+        val r = matcher.match(lines("~~~" to 48, "Wenn du M-Simsala-EX von deiner Hand spielst, um" to 12,
+            "117/124★" to 12, "©2016 Pokémon" to 10))
+        assertEquals(r.show(), "xy10-117", r.best?.card?.id)
+    }
+
+    @Test
+    fun logoZusatzMitUndOhneLogoSicher() {
+        for (name in listOf("Pikachu VMAX KP 310", "Pikachu KP 310")) {
+            val r = matcher.match(lines(name to 48, "044/185" to 12, "©2020 Pokémon" to 10))
+            assertEquals(r.show(), "swsh4-44", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        for (name in listOf("Glurak-ex KP 330", "Glurak KP 330")) {
+            val r = matcher.match(lines(name to 48, "006/165" to 12, "©2023 Pokémon" to 10))
+            assertEquals(r.show(), "sv03.5-006", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+    }
+
     // ---------- 5) Nachdrucke mit Originalnummer (Celebrations Classic Collection) ----------
 
     @Test

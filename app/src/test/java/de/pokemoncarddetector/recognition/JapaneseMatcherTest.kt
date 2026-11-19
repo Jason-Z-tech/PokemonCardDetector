@@ -205,4 +205,79 @@ class JapaneseMatcherTest {
         val u = matcher.match(lines("ブラッキーVMAX" to 48, "s6a E 048/069 RRR" to 12))
         assertEquals(u.show(), "ja:S6a-048", u.best?.card?.id)
     }
+
+    /** Wie ScanViewModel: unsicherer Treffer mit Name >= 0.85 wird live als Vorschlag gezeigt. */
+    private fun MatchResult.liveSuggestion() = best?.takeIf { !confident && it.nameScore >= 0.85 }
+
+    @Test
+    fun platzhalterOhneKuerzelBleibtVorFremdemSet() {
+        // Shiny Star V Glurak-VMAX 308/190, Kuerzel nicht gelesen (Regelzeichen klebt an Nummer/Kuerzel, Punkt dazwischen).
+        // SV4a hat auch 190 Karten: dessen Glurak-ex 115/190 ist nur eine Vermutung und darf nicht vorbeiziehen
+        for (code in listOf("s4a D308/190 SSR", "s4aD 308/190", "s4a・D 308/190")) {
+            val r = matcher.match(lines("リザードン" to 48, "HP330" to 20, code to 12))
+            assertEquals(r.show(), "ja:S4a-308", r.best?.card?.id)
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            // als Auswahl bleibt Glurak-ex erhalten
+            assertTrue(r.show(), r.alternatives.any { it.card.id == "ja:SV4a-115" })
+        }
+        val vmax = matcher.match(lines("リザードンVMAX" to 48, "HP330" to 20, "s4a D308/190 SSR" to 12))
+        assertEquals(vmax.show(), "ja:S4a-308", vmax.best?.card?.id)
+        assertEquals(vmax.show(), null, vmax.liveSuggestion()?.card?.id)
+    }
+
+    @Test
+    fun platzhalterLaesstTypischeFehllesungDurch() {
+        // Eine Ziffer daneben (115 als 116 gelesen) bleibt der typische OCR-Fehler: Glurak-ex vor Platzhalter S4a-116
+        val r = matcher.match(lines("リザードン" to 48, "HP330" to 20, "116/190" to 12))
+        assertEquals(r.show(), "ja:SV4a-115", r.best?.card?.id)
+        // Mit exakt gelesenem Namen ebenso
+        val ex = matcher.match(lines("リザードンex" to 48, "HP330" to 20, "308/190" to 12))
+        assertEquals(ex.show(), "リザードンex", ex.best?.card?.name)
+        // Kuerzel "sv4a" gelesen: der Platzhalter S4a-308 passt nicht dazu und haelt Glurak-ex nicht auf
+        val sv = matcher.match(lines("リザードン" to 48, "HP330" to 20, "G sv4a 308/190" to 12))
+        assertEquals(sv.show(), "リザードンex", sv.best?.card?.name)
+        assertEquals(sv.show(), "ja:SV4a", sv.best?.card?.setId)
+    }
+
+    @Test
+    fun enthaltenerNameEinesAnderenPokemonGewinntNicht() {
+        // XY2 Glurak-EX 011/080 (Platzhalter ohne Namen, kein Kuerzel auf XY-Karten). "リザード" (Glutexo, M2-012)
+        // steckt in "リザードンEX", ist aber ein anderes Pokemon: weder bester Treffer noch Live-Vorschlag
+        for (hp in listOf(emptyList(), listOf("HP180" to 20))) {
+            val r = matcher.match(lines("リザードンEX" to 48, *hp.toTypedArray(), "011/080" to 12))
+            val all = listOfNotNull(r.best) + r.alternatives
+            assertTrue(r.show(), all.none { it.card.name == "リザード" })
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            assertTrue(r.show(), r.best!!.card.isPlaceholder)
+            assertTrue(r.show(), all.any { it.card.id == "ja:XY2-011" })
+            // den gelesenen Namen gibt es im Katalog: diese Karten erscheinen zumindest als Auswahl
+            assertTrue(r.show(), all.any { it.card.name == "リザードンex" })
+        }
+        // Nummer der Glutexo-Karte selbst gelesen (012/080): nicht sicher, also kein automatisches Hinzufuegen
+        val g = matcher.match(lines("リザードンEX" to 48, "012/080" to 12))
+        assertFalse(g.show(), g.confident)
+        assertEquals(g.show(), null, g.liveSuggestion()?.card?.id)
+    }
+
+    @Test
+    fun nurNameOhneEnthalteneVorstufe() {
+        // Ohne Nummer, KP der Glutexo-Karten (90) gelesen: "リザードンEX" ist trotzdem Glurak-ex, nicht Glutexo
+        val r = matcher.match(lines("リザードンEX" to 48, "HP90" to 20))
+        assertEquals(r.show(), "リザードンex", r.best?.card?.name)
+        assertTrue(r.show(), (r.alternatives + r.best!!).none { it.card.name == "リザード" })
+    }
+
+    @Test
+    fun vorstufeMitFalscherZifferWirdNichtVorgeschlagen() {
+        // Zoroark 059/086, OCR liest 058 (= Zorua): "ゾロア" steckt in "ゾロアーク", ist aber die Vorstufe
+        val r = matcher.match(lines("ゾロアーク" to 48, "HP120" to 20, "058/086" to 12))
+        assertEquals(r.show(), "ja:SV11W-059", r.best?.card?.id)
+        assertFalse(r.show(), r.confident)
+        // Mewtu 086/128 als 087 gelesen (= Mew)
+        val m = matcher.match(lines("ミュウツー" to 48, "087/128" to 12))
+        assertFalse(m.show(), m.best?.card?.name == "ミュウ")
+        assertEquals(m.show(), null, m.liveSuggestion()?.takeIf { it.card.name == "ミュウ" })
+    }
 }
