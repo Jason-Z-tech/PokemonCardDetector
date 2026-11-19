@@ -18,12 +18,15 @@ und legt sie in deiner Sammlung ab – sortiert nach Serien und Sets (z. B. *Far
 - **Suche** nach Name oder Nummer, um Karten auch ohne Scan hinzuzufügen.
 - **Automatisch hinzufügen** (optional): erkannte Karten landen ohne Tippen in der Sammlung.
 - **Varianten**: Normal, Holo, Reverse Holo, Pokéball-/Meisterball-Reverse, 1. Edition, schattenlos usw. –
-  die Anzahl wird je Variante gezählt.
-- **Japanische Karten**: 121 japanische Sets (über 13.000 Karten) mit deutschem Namenshinweis
+  die Anzahl wird je Variante gezählt. Holo und Reverse Holo kann die Kamera nicht unterscheiden – die Variante
+  wählst du in den Kartendetails.
+- **Japanische Karten**: 189 japanische Sets (über 18.000 Karten) mit deutschem Namenshinweis
   (z. B. „リザードンex (Glurak ex)“). Sammlung umschaltbar *International / Japanisch*, Scanner mit japanischer Texterkennung.
+  Einige ältere Sets haben bei TCGdex noch keine Kartennamen – dort zeigt die App die Kartennummer.
 - **Cardmarket-Preise**: Trendpreis, 30-Tage-Durchschnitt oder Ab-Preis je Variante. Die Preise kommen über TCGdex
   von Cardmarket (dort täglich aktualisiert) und werden beim Start, beim Öffnen einer Karte und einmal täglich im
-  Hintergrund aktualisiert.
+  Hintergrund aktualisiert. Hat eine Variante kein eigenes Cardmarket-Produkt (z. B. 1. Edition), zeigt die App
+  den Preis des gemeinsamen Produkts als „ab“-Preis.
 - **Statistik**: Wert der Sammlung mit Veränderung, Wertverlauf, wertvollste Karten, Wert je Serie,
   Exemplare je Variante, Karten je Seltenheit.
 - **Wunschliste**: Herz in den Kartendetails; Liste mit Preisen und Gesamtkosten der fehlenden Karten.
