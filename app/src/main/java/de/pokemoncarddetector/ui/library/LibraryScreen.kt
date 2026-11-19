@@ -2,6 +2,8 @@ package de.pokemoncarddetector.ui.library
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,6 +64,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -84,8 +89,9 @@ class LibraryViewModel(
     /** Suchtext separat, damit das Textfeld synchron bleibt */
     val query = MutableStateFlow("")
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val state: StateFlow<LibraryUiState> = combine(
-        repository.observeSets(),
+        settingsRepo.settings.map { it.libraryJapanese }.distinctUntilChanged().flatMapLatest { repository.observeSets(it) },
         repository.observeSeries(),
         repository.observeTotals(),
         settingsRepo.settings,
@@ -118,6 +124,7 @@ class LibraryViewModel(
     fun setQuery(q: String) { query.value = q }
     fun toggleImages() = viewModelScope.launch { settingsRepo.setShowImages(!state.value.settings.showImages) }
     fun setOnlyOwned(v: Boolean) = viewModelScope.launch { settingsRepo.setOnlyOwnedSets(v) }
+    fun setJapanese(v: Boolean) = viewModelScope.launch { settingsRepo.setLibraryJapanese(v) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -160,7 +167,15 @@ fun LibraryScreen(onOpenSet: (String) -> Unit, onOpenSettings: () -> Unit) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical = 8.dp),
+                    ) {
+                        FilterChip(selected = !state.settings.libraryJapanese, onClick = { vm.setJapanese(false) }, label = { Text("International") })
+                        FilterChip(selected = state.settings.libraryJapanese, onClick = { vm.setJapanese(true) }, label = { Text("Japanisch") })
+                        Spacer(Modifier.width(8.dp))
                         FilterChip(selected = !state.settings.onlyOwnedSets, onClick = { vm.setOnlyOwned(false) }, label = { Text("Alle Sets") })
                         FilterChip(selected = state.settings.onlyOwnedSets, onClick = { vm.setOnlyOwned(true) }, label = { Text("Nur meine Sets") })
                     }

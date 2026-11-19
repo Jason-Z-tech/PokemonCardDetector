@@ -55,6 +55,7 @@ data class CatalogCard(
     val variants: List<String> = emptyList(),
     val hp: Int = 0,
     val regulationMark: String = "",
+    val rarity: String = "",
 )
 
 fun CatalogSet.parsedCards(variantDictionary: List<String> = emptyList()): List<CatalogCard> = cards.mapNotNull { row ->
@@ -70,6 +71,7 @@ fun CatalogSet.parsedCards(variantDictionary: List<String> = emptyList()): List<
         variants = variants,
         hp = row.getOrNull(5)?.jsonPrimitive?.intOrNull ?: 0,
         regulationMark = row.getOrNull(6)?.jsonPrimitive?.content.orEmpty(),
+        rarity = row.getOrNull(7)?.jsonPrimitive?.content.orEmpty().takeIf { it != "None" }.orEmpty(),
     )
 }
 
@@ -103,6 +105,7 @@ fun CatalogCard.toEntity(setId: String, sortIndex: Int) = CardEntity(
     variants = variants.joinToString(";"),
     hp = hp,
     regulationMark = regulationMark,
+    rarity = rarity,
 )
 
 /** Unter-Sets (Trainer-Galerie, Galar-Galerie, Glitzer-Tresor) haben ihre Bilder im Ordner des Haupt-Sets. */

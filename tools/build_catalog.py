@@ -59,7 +59,7 @@ def head_ok(url):
 
 
 GRAPHQL = "https://api.tcgdex.net/v2/graphql"
-VARIANT_QUERY = '{ cards(filters: {id: "%s-"}, pagination: {page: %d, count: 100}) { id hp regulationMark variants_detailed { type subtype foil stamp size } } }'
+VARIANT_QUERY = '{ cards(filters: {id: "%s-"}, pagination: {page: %d, count: 100}) { id hp regulationMark dexId rarity variants_detailed { type subtype foil stamp size } } }'
 
 
 def graphql(query, retries=5):
@@ -84,7 +84,7 @@ def variant_key(v):
     if v.get("foil"):
         parts.append("foil=" + v["foil"])
     if v.get("stamp"):
-        parts.append("stamp=" + ",".join(v["stamp"]))
+        parts.append("stamp=" + ",".join(st.strip().lower().replace(" ", "-") for st in v["stamp"]))
     if v.get("size") and v["size"] != "standard":
         parts.append("size=" + v["size"])
     return "|".join(parts)
@@ -106,7 +106,7 @@ def fetch_variants(set_id):
                 k = variant_key(v)
                 if k not in keys:
                     keys.append(k)
-            out[lid] = (c.get("hp") or 0, c.get("regulationMark") or "", keys)
+            out[lid] = (c.get("hp") or 0, c.get("regulationMark") or "", keys, c.get("dexId") or [], c.get("rarity") or "")
         if len(cards) < 100:
             break
         page += 1
@@ -143,6 +143,7 @@ def main():
     with cf.ThreadPoolExecutor(max_workers=10) as ex:
         variants = dict(ex.map(fetch_variants, list(dict.fromkeys(list(sets_en) + list(sets_de)))))
     variant_index = {}
+    species_names = {}  # Pokedex-Nr. -> deutsche Kartennamen (fuer japanische Karten)
 
     out_sets = []
     used_series = {}
@@ -191,9 +192,11 @@ def main():
         for lid in order:
             c = cards[lid]
             flags = (1 if c["imgDe"] else 0) | (2 if c["imgEn"] else 0) | (4 if c["de"] else 0)
-            hp, reg, keys = set_variants.get(lid, (0, "", []))
+            hp, reg, keys, dex, rarity = set_variants.get(lid, (0, "", [], [], ""))
             idx = [variant_index.setdefault(k, len(variant_index)) for k in keys]
-            card_rows.append([lid, c["de"] or c["en"] or "", c["en"] or c["de"] or "", flags, idx, hp, reg])
+            card_rows.append([lid, c["de"] or c["en"] or "", c["en"] or c["de"] or "", flags, idx, hp, reg, rarity])
+            if c["de"] and len(dex) == 1:
+                species_names.setdefault(dex[0], []).append(c["de"])
         logo = (de or {}).get("logo") or (en or {}).get("logo")
         symbol = (de or {}).get("symbol") or (en or {}).get("symbol")
         out_sets.append({
@@ -231,6 +234,102 @@ def main():
         f.write(catalog["version"])
     n_cards = sum(len(s["cards"]) for s in out_sets)
     print(f"{len(out_sets)} Sets, {n_cards} Karten, {os.path.getsize(OUT) // 1024} KB -> {os.path.normpath(OUT)}")
+
+    if "--ohne-japanisch" not in sys.argv:
+        build_japanese(german_species(species_names), catalog["version"])
+
+
+def german_species(species_names):
+    """Pokedex-Nr. -> deutscher Pokemon-Name (haeufigster einfacher Kartenname, z.B. 6 -> 'Glurak')."""
+    out = {}
+    for dex, names in species_names.items():
+        simple = [n for n in names if re.fullmatch(r"[\wÄÖÜäöüß.'’]+", n)]
+        pool = simple or names
+        counts = {}
+        for n in pool:
+            counts[n] = counts.get(n, 0) + 1
+        out[dex] = sorted(counts.items(), key=lambda kv: (-kv[1], len(kv[0])))[0][0]
+    return out
+
+
+JA_SUFFIXES = [("VMAX", " VMAX"), ("VSTAR", " VSTAR"), ("VUNION", " V-UNION"), ("GX", "-GX"), ("EX", "-EX"), ("ex", " ex"), ("V", " V"), ("BREAK", " BREAK")]
+
+
+def german_hint(name_ja, dex_ids, species):
+    """Deutscher Hinweis fuer eine japanische Karte, z.B. 'リザードンex' + [6] -> 'Glurak ex'."""
+    names = [species[d] for d in dex_ids if d in species]
+    if not names:
+        return ""
+    hint = " & ".join(names)
+    if name_ja.startswith("メガ"):
+        hint = "Mega-" + hint
+    for jp, de in JA_SUFFIXES:
+        if name_ja.endswith(jp):
+            hint += de
+            break
+    return hint
+
+
+def build_japanese(species, version):
+    """Japanische Sets/Karten -> assets/catalog_ja.json (IDs mit Praefix 'ja:', Bilder unter /ja/)."""
+    sets = get("ja/sets") or []
+    series = {s["id"]: s["name"] for s in (get("ja/series") or [])}
+    with cf.ThreadPoolExecutor(max_workers=12) as ex:
+        details = dict(zip([s["id"] for s in sets], ex.map(lambda sid: get(f"ja/sets/{sid}"), [s["id"] for s in sets])))
+    card_ids = [c["id"] for d in details.values() if d for c in d.get("cards", [])]
+    with cf.ThreadPoolExecutor(max_workers=16) as ex:
+        card_details = dict(zip(card_ids, ex.map(lambda cid: get(f"ja/cards/{cid}", retries=3), card_ids)))
+
+    variant_index = {}
+    out_sets = []
+    used_series = {}
+    for sid, d in details.items():
+        if not d or not d.get("cards"):
+            continue
+        serie = (d.get("serie") or {}).get("id", "misc")
+        used_series[serie] = True
+        rows = []
+        for c in sorted(d["cards"], key=lambda c: natural_key(c["localId"])):
+            cd = card_details.get(c["id"]) or {}
+            keys = []
+            for v in cd.get("variants_detailed") or []:
+                k = variant_key({"type": (v.get("type") or "normal").lower(), "subtype": v.get("subtype"),
+                                 "foil": v.get("foil"), "stamp": v.get("stamp"), "size": v.get("size")})
+                if k not in keys:
+                    keys.append(k)
+            idx = [variant_index.setdefault(k, len(variant_index)) for k in keys]
+            flags = 16 if "image" in c else 0
+            hint = german_hint(c.get("name") or "", cd.get("dexId") or [], species)
+            rows.append([c["localId"], c.get("name") or "", hint, flags, idx, cd.get("hp") or 0,
+                         cd.get("regulationMark") or "", cd.get("rarity") or ""])
+        cc = d.get("cardCount") or {}
+        out_sets.append({
+            "id": "ja:" + sid,
+            "name": d.get("name") or sid,
+            "nameEn": d.get("name") or sid,
+            "serie": "ja:" + serie,
+            "release": d.get("releaseDate") or "",
+            "abbr": sid,  # japanische Karten drucken die Set-ID (z.B. 'SV2a') neben die Nummer
+            "official": cc.get("official") or 0,
+            "total": cc.get("total") or len(rows),
+            "de": False,
+            "logo": d.get("logo") or "",
+            "symbol": d.get("symbol") or "",
+            "img": sid,
+            "cards": rows,
+        })
+    out_series = [{"id": "ja:" + s, "name": series.get(s) or s, "nameEn": series.get(s) or s} for s in used_series]
+    catalog = {
+        "version": version,
+        "series": out_series,
+        "variants": [k for k, _ in sorted(variant_index.items(), key=lambda kv: kv[1])],
+        "sets": out_sets,
+    }
+    out = os.path.join(ASSETS_DIR, "catalog_ja.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(catalog, f, ensure_ascii=False, separators=(",", ":"))
+    n_cards = sum(len(s["cards"]) for s in out_sets)
+    print(f"Japanisch: {len(out_sets)} Sets, {n_cards} Karten, {os.path.getsize(out) // 1024} KB -> {os.path.normpath(out)}")
 
 
 if __name__ == "__main__":

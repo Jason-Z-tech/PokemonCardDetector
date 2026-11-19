@@ -14,8 +14,8 @@ android {
         applicationId = "de.pokemoncarddetector"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
         vectorDrawables { useSupportLibrary = true }
         // Nur Handy-Prozessoren (ARM) – halbiert die APK-Groesse (ML-Kit-Bibliotheken)
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
@@ -101,6 +101,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+    // Preise taeglich im Hintergrund aktualisieren
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // Netzwerk + Bilder
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

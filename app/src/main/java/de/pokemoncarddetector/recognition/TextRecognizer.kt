@@ -9,6 +9,7 @@ import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.Closeable
@@ -19,7 +20,13 @@ import kotlin.coroutines.resumeWithException
 /** Kapselt ML Kit (Texterkennung laeuft offline auf dem Geraet). */
 class CardTextRecognizer : Closeable {
 
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val latin by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+    private val japaneseRecognizer by lazy { TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build()) }
+
+    /** true = japanische Karten (Kana/Kanji + lateinisch), sonst lateinische Schrift */
+    @Volatile var japanese: Boolean = false
+
+    private val recognizer get() = if (japanese) japaneseRecognizer else latin
 
     /**
      * Feste Drehung fuer Kamerabilder (Sensorausrichtung bezogen auf Hochformat).
@@ -68,7 +75,10 @@ class CardTextRecognizer : Closeable {
         }
     }
 
-    override fun close() = recognizer.close()
+    override fun close() {
+        runCatching { latin.close() }
+        runCatching { japaneseRecognizer.close() }
+    }
 
     companion object {
         fun Text.toLines(): List<OcrLine> = textBlocks.flatMap { block ->

@@ -33,16 +33,20 @@ class CatalogStore(private val context: Context, private val db: AppDatabase) {
             .getOrNull()?.takeIf { it.isNotEmpty() } ?: readBundled().version
     }
 
-    suspend fun readBundled(): CatalogFile = withContext(Dispatchers.IO) {
-        context.assets.open("catalog.json").bufferedReader(Charsets.UTF_8).use { reader ->
+    suspend fun readBundled(name: String = "catalog.json"): CatalogFile = withContext(Dispatchers.IO) {
+        context.assets.open(name).bufferedReader(Charsets.UTF_8).use { reader ->
             json.decodeFromString(CatalogFile.serializer(), reader.readText())
         }
     }
 
-    /** Importiert die mitgelieferte Datei. */
+    /** Importiert die mitgelieferten Dateien (international + japanisch). */
     suspend fun importBundled(onProgress: (Float) -> Unit = {}): String {
         val file = readBundled()
-        write(file.series, file.sets.map { SetPayload(it, it.parsedCards(file.variants)) }, removeMissing = false, onProgress)
+        write(file.series, file.sets.map { SetPayload(it, it.parsedCards(file.variants)) }, removeMissing = false) { onProgress(it * 0.6f) }
+        val ja = runCatching { readBundled("catalog_ja.json") }.getOrNull()
+        if (ja != null) {
+            write(ja.series, ja.sets.map { SetPayload(it, it.parsedCards(ja.variants)) }, removeMissing = false) { onProgress(0.6f + it * 0.4f) }
+        }
         return file.version
     }
 

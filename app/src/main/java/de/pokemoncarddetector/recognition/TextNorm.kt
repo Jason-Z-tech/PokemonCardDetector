@@ -5,17 +5,23 @@ import java.text.Normalizer
 /** Hilfsfunktionen zum unscharfen Vergleichen von OCR-Text mit Kartennamen. */
 object TextNorm {
 
-    private val DIACRITICS = Regex("\\p{Mn}+")
-    private val NON_ALNUM = Regex("[^a-z0-9]")
-
-    /** Kleinbuchstaben, ohne Akzente/Umlaut-Punkte, nur a-z und 0-9. "Pokémon-ex" -> "pokemonex" */
+    /**
+     * Kleinbuchstaben, ohne Akzente, nur Buchstaben und Ziffern (auch Kana/Kanji fuer japanische Karten).
+     * "Pokémon-ex" -> "pokemonex", "ＳＶ２ａ" -> "sv2a", "リザードンex" -> "リサードンex" (Dakuten entfallen auf beiden Seiten).
+     */
     fun normalize(s: String): String {
-        val lower = s.lowercase()
+        val compat = Normalizer.normalize(s, Normalizer.Form.NFKC)
+        val lower = compat.lowercase()
             .replace("ß", "ss")
             .replace("♀", "w")
             .replace("♂", "m")
         val decomposed = Normalizer.normalize(lower, Normalizer.Form.NFD)
-        return DIACRITICS.replace(decomposed, "").let { NON_ALNUM.replace(it, "") }
+        val sb = StringBuilder(decomposed.length)
+        for (ch in decomposed) {
+            if (Character.getType(ch) == Character.NON_SPACING_MARK.toInt()) continue
+            if (Character.isLetterOrDigit(ch)) sb.append(ch)
+        }
+        return sb.toString()
     }
 
     fun levenshtein(a: String, b: String): Int {

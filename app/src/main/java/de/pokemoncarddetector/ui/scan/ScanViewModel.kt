@@ -91,7 +91,7 @@ class ScanViewModel(
     private var userChoice: String? = null
 
     private suspend fun matcher(): CardMatcher = matcherLock.withLock {
-        val index = repository.catalogIndex()
+        val index = repository.catalogIndex(japanese = settings.value.scanJapanese)
         if (matcher == null || matcherIndex !== index) {
             matcher = CardMatcher(index)
             matcherIndex = index
@@ -311,6 +311,20 @@ class ScanViewModel(
 
     fun setAutoAdd(on: Boolean) {
         viewModelScope.launch { settingsRepo.setAutoAdd(on) }
+    }
+
+    /** Umschalten zwischen internationalen und japanischen Karten. */
+    fun setJapanese(on: Boolean) {
+        recognizer.japanese = on
+        stabilizer.reset()
+        _state.update { it.copy(detection = null, status = if (on) "Japanische Karte in den Rahmen halten" else "Halte eine Karte in den Rahmen") }
+        viewModelScope.launch { settingsRepo.setScanJapanese(on) }
+    }
+
+    init {
+        viewModelScope.launch {
+            settings.collect { recognizer.japanese = it.scanJapanese }
+        }
     }
 
     override fun onCleared() {

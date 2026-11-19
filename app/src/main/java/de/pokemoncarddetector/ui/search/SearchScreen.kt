@@ -184,10 +184,10 @@ fun SearchScreen(onOpenSet: (String) -> Unit) {
                     leadingContent = {
                         CardTile(item, state.settings.showImages, state.settings.imageLanguage, Modifier.width(56.dp), showQuantityBadge = false)
                     },
-                    headlineContent = { Text(item.card.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    headlineContent = { Text(item.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
                         Text(
-                            "${item.setName} · ${item.setRelease.take(4)} · Nr. ${item.numberLabel}" +
+                            (if (item.isJapanese) "🇯🇵 " else "") + "${item.setName} · ${item.setRelease.take(4)} · Nr. ${item.numberLabel}" +
                                 if (item.quantity > 0) "\n${item.quantity}× im Besitz" else "",
                         )
                     },

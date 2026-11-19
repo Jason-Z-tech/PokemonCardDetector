@@ -9,7 +9,8 @@ import kotlinx.coroutines.flow.Flow
 private const val CARD_ITEM_COLUMNS = """
     c.*, COALESCE(col.quantity, 0) AS quantity, col.variantQuantities AS variantQuantities,
     s.name AS setName, s.nameEn AS setNameEn,
-    s.serieId AS serieId, s.officialCount AS setOfficial, s.releaseDate AS setRelease, s.imageSetId AS imageSetId
+    s.serieId AS serieId, s.officialCount AS setOfficial, s.releaseDate AS setRelease, s.imageSetId AS imageSetId,
+    EXISTS(SELECT 1 FROM wishlist w WHERE w.cardId = c.id) AS wished
 """
 
 /** Sammlung je Karte zusammengefasst: Gesamtanzahl + "variante=anzahl;..." */
@@ -66,11 +67,11 @@ interface CatalogDao {
             WHERE col.quantity > 0
             GROUP BY k.setId
         ) o ON o.setId = s.id
-        WHERE s.cardCount > 0
+        WHERE s.cardCount > 0 AND (s.id LIKE 'ja:%') = :japanese
         ORDER BY s.releaseDate DESC, s.id DESC
         """
     )
-    fun observeSetsWithProgress(): Flow<List<SetWithProgress>>
+    fun observeSetsWithProgress(japanese: Boolean): Flow<List<SetWithProgress>>
 
     @Query("SELECT * FROM sets WHERE id = :setId")
     fun observeSet(setId: String): Flow<SetEntity?>
@@ -130,8 +131,19 @@ interface CatalogDao {
     )
     fun observeRecentlyAdded(limit: Int): Flow<List<CardItem>>
 
-    @Query("SELECT id, setId, localId, name, nameEn, hp FROM cards")
-    suspend fun indexRows(): List<IndexCardRow>
+    @Query("SELECT id, setId, localId, name, nameEn, hp FROM cards WHERE (setId LIKE 'ja:%') = :japanese")
+    suspend fun indexRows(japanese: Boolean): List<IndexCardRow>
+
+    @Query(
+        """
+        SELECT $CARD_ITEM_COLUMNS
+        FROM cards c JOIN sets s ON s.id = c.setId
+        LEFT JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
+        WHERE c.id IN (SELECT cardId FROM wishlist)
+        ORDER BY s.releaseDate DESC, c.sortIndex
+        """
+    )
+    fun observeWishlistCards(): Flow<List<CardItem>>
 }
 
 @Dao

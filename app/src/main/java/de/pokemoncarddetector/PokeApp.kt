@@ -10,7 +10,12 @@ import de.pokemoncarddetector.data.CatalogManager
 import de.pokemoncarddetector.data.SettingsRepository
 import de.pokemoncarddetector.data.catalog.CatalogStore
 import de.pokemoncarddetector.data.catalog.CatalogSync
+import de.pokemoncarddetector.data.CatalogState
 import de.pokemoncarddetector.data.db.AppDatabase
+import de.pokemoncarddetector.data.prices.PriceRepository
+import de.pokemoncarddetector.work.PriceWorker
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +32,7 @@ class AppContainer(app: Application) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+    val priceRepository = PriceRepository(database, httpClient, settings)
     private val catalogStore = CatalogStore(app, database)
     val catalogManager = CatalogManager(
         scope = appScope,
@@ -46,6 +52,13 @@ class PokeApp : Application(), ImageLoaderFactory {
         super.onCreate()
         container = AppContainer(this)
         container.catalogManager.ensureReady()
+        // Preise aktuell halten: beim Start (nur veraltete) + taeglich im Hintergrund
+        container.appScope.launch {
+            val settings = container.settings.settings.first()
+            PriceWorker.schedule(this@PokeApp, settings.autoPrices)
+            container.catalogManager.state.first { it == CatalogState.Ready }
+            if (settings.autoPrices) runCatching { container.priceRepository.refreshTracked() }
+        }
     }
 
     /** Kartenbilder werden dauerhaft zwischengespeichert (bis 512 MB), damit die Sammlung offline aussieht. */

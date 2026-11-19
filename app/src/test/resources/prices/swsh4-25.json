@@ -1,0 +1,95 @@
+{
+ "id": "swsh4-25",
+ "localId": "25",
+ "variants_detailed": [
+  {
+   "type": "normal",
+   "size": "standard",
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.980Z",
+     "unit": "EUR",
+     "idProduct": 511545,
+     "avg": 2.54,
+     "low": 0.5,
+     "trend": 13.8,
+     "avg1": 1.5,
+     "avg7": 26.06,
+     "avg30": 9.04,
+     "avg-holo": 3.01,
+     "low-holo": 1.49,
+     "trend-holo": 3.3,
+     "avg1-holo": 4.44,
+     "avg7-holo": 3.26,
+     "avg30-holo": 3.11
+    }
+   }
+  },
+  {
+   "type": "holo",
+   "size": "standard",
+   "foil": "cracked-ice",
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.980Z",
+     "unit": "EUR",
+     "idProduct": 547881,
+     "avg": 15.15,
+     "low": 2.5,
+     "trend": 17.37,
+     "avg1": 24,
+     "avg7": 12.58,
+     "avg30": 15.4,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 0,
+     "avg1-holo": null,
+     "avg7-holo": null,
+     "avg30-holo": null
+    }
+   }
+  },
+  {
+   "type": "reverse",
+   "size": "standard",
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.980Z",
+     "unit": "EUR",
+     "idProduct": 511545,
+     "avg": 2.54,
+     "low": 0.5,
+     "trend": 13.8,
+     "avg1": 1.5,
+     "avg7": 26.06,
+     "avg30": 9.04,
+     "avg-holo": 3.01,
+     "low-holo": 1.49,
+     "trend-holo": 3.3,
+     "avg1-holo": 4.44,
+     "avg7-holo": 3.26,
+     "avg30-holo": 3.11
+    }
+   }
+  }
+ ],
+ "pricing": {
+  "cardmarket": {
+   "updated": "2026-11-18T22:16:18.980Z",
+   "unit": "EUR",
+   "idProduct": 511545,
+   "avg": 2.54,
+   "low": 0.5,
+   "trend": 13.8,
+   "avg1": 1.5,
+   "avg7": 26.06,
+   "avg30": 9.04,
+   "avg-holo": 3.01,
+   "low-holo": 1.49,
+   "trend-holo": 3.3,
+   "avg1-holo": 4.44,
+   "avg7-holo": 3.26,
+   "avg30-holo": 3.11
+  }
+ }
+}

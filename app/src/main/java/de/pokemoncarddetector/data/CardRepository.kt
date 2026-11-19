@@ -8,6 +8,7 @@ import de.pokemoncarddetector.data.db.CollectionTotals
 import de.pokemoncarddetector.data.db.SerieEntity
 import de.pokemoncarddetector.data.db.SetEntity
 import de.pokemoncarddetector.data.db.SetWithProgress
+import de.pokemoncarddetector.data.db.WishEntity
 import de.pokemoncarddetector.recognition.CardTextParser
 import de.pokemoncarddetector.recognition.CatalogIndex
 import de.pokemoncarddetector.recognition.IndexCard
@@ -31,8 +32,17 @@ class CardRepository(private val db: AppDatabase) {
 
     private val catalog = db.catalogDao()
     private val collection = db.collectionDao()
+    private val wishlist = db.wishlistDao()
 
-    fun observeSets(): Flow<List<SetWithProgress>> = catalog.observeSetsWithProgress()
+    fun observeSets(japanese: Boolean): Flow<List<SetWithProgress>> = catalog.observeSetsWithProgress(japanese)
+    fun observeWishlistCards(): Flow<List<CardItem>> = catalog.observeWishlistCards()
+    fun observeWishes(): Flow<List<WishEntity>> = wishlist.observeAll()
+    fun observeWishesFor(cardId: String): Flow<List<WishEntity>> = wishlist.observeFor(cardId)
+
+    /** Karte auf die Wunschliste (variant "" = egal welche Variante) oder entfernen. */
+    suspend fun setWished(cardId: String, wished: Boolean, variant: String = "") {
+        if (wished) wishlist.upsert(WishEntity(cardId, variant, System.currentTimeMillis())) else wishlist.removeCard(cardId)
+    }
     fun observeSeries(): Flow<List<SerieEntity>> = catalog.observeSeries()
     fun observeSet(setId: String): Flow<SetEntity?> = catalog.observeSet(setId)
     fun observeCardsInSet(setId: String): Flow<List<CardItem>> = catalog.observeCardsInSet(setId)
@@ -76,10 +86,12 @@ class CardRepository(private val db: AppDatabase) {
 
     private val indexMutex = Mutex()
     @Volatile private var cachedIndex: CatalogIndex? = null
+    @Volatile private var cachedIndexJa: CatalogIndex? = null
 
-    suspend fun catalogIndex(): CatalogIndex = indexMutex.withLock {
-        cachedIndex ?: withContext(Dispatchers.Default) {
-            val sets = catalog.allSets().map {
+    /** Erkennungs-Index fuer internationale bzw. japanische Karten. */
+    suspend fun catalogIndex(japanese: Boolean = false): CatalogIndex = indexMutex.withLock {
+        (if (japanese) cachedIndexJa else cachedIndex) ?: withContext(Dispatchers.Default) {
+            val sets = catalog.allSets().filter { it.id.startsWith("ja:") == japanese }.map {
                 IndexSet(
                     id = it.id,
                     name = it.name,
@@ -90,20 +102,29 @@ class CardRepository(private val db: AppDatabase) {
                     totalCount = it.totalCount,
                 )
             }
-            val cards = catalog.indexRows().map { IndexCard(it.id, it.setId, it.localId, it.name, it.nameEn, it.hp) }
+            val cards = catalog.indexRows(japanese).map { IndexCard(it.id, it.setId, it.localId, it.name, it.nameEn, it.hp) }
             CatalogIndex(sets, cards)
-        }.also { cachedIndex = it }
+        }.also { if (japanese) cachedIndexJa = it else cachedIndex = it }
     }
 
     /** Nach Katalog-Aenderungen aufrufen. */
     fun invalidateIndex() {
         cachedIndex = null
+        cachedIndexJa = null
     }
 
     // ---------- Sicherung ----------
 
     @Serializable
-    data class Backup(val app: String = "PokemonCardDetector", val version: Int = 2, val cards: List<Entry>) {
+    data class Backup(
+        val app: String = "PokemonCardDetector",
+        val version: Int = 3,
+        val cards: List<Entry>,
+        val wishlist: List<Wish> = emptyList(),
+    ) {
+        @Serializable
+        data class Wish(val id: String, val variant: String = "", val addedAt: Long = 0)
+
         @Serializable
         data class Entry(val id: String, val quantity: Int, val updatedAt: Long = 0, val variant: String = "")
     }
@@ -112,7 +133,8 @@ class CardRepository(private val db: AppDatabase) {
 
     suspend fun exportJson(): String = withContext(Dispatchers.IO) {
         val entries = collection.all().map { Backup.Entry(it.cardId, it.quantity, it.updatedAt, it.variant) }
-        json.encodeToString(Backup.serializer(), Backup(cards = entries))
+        val wishes = wishlist.all().map { Backup.Wish(it.cardId, it.variant, it.addedAt) }
+        json.encodeToString(Backup.serializer(), Backup(cards = entries, wishlist = wishes))
     }
 
     /** @return Anzahl importierter Karten */
@@ -121,9 +143,12 @@ class CardRepository(private val db: AppDatabase) {
         val now = System.currentTimeMillis()
         val entries = backup.cards.filter { it.quantity > 0 && it.id.isNotBlank() }
             .map { CollectionEntity(it.id, it.variant, it.quantity.coerceAtMost(999), if (it.updatedAt > 0) it.updatedAt else now) }
+        val wishes = backup.wishlist.filter { it.id.isNotBlank() }
+            .map { WishEntity(it.id, it.variant, if (it.addedAt > 0) it.addedAt else now) }
         db.withTransaction {
             if (replace) collection.clear()
             collection.upsertAll(entries)
+            wishlist.upsertAll(wishes)
         }
         entries.size
     }

@@ -66,6 +66,9 @@ data class CardEntity(
     /** Regelzeichen (D, E, F, G, H, ...), leer wenn keins */
     @ColumnInfo(defaultValue = "''")
     val regulationMark: String = "",
+    /** Seltenheit laut TCGdex (englisch, z.B. "Rare Holo"), leer wenn unbekannt */
+    @ColumnInfo(defaultValue = "''")
+    val rarity: String = "",
 )
 
 /** Eine Variante einer Karte in der Sammlung (z.B. swsh4-25 als Reverse Holo, 2x). */
@@ -100,7 +103,16 @@ data class CardItem(
     @ColumnInfo(name = "imageSetId") val imageSetId: String,
     /** "variante=anzahl;..." aus der Sammlung (null = nichts gesammelt) */
     @ColumnInfo(name = "variantQuantities") val variantQuantities: String? = null,
+    /** auf der Wunschliste */
+    @ColumnInfo(name = "wished") val wished: Boolean = false,
 ) {
+    /** Japanische Karte (eigener Katalog, IDs mit "ja:") */
+    val isJapanese: Boolean get() = card.setId.startsWith("ja:")
+
+    /** Japanischer Name + deutscher Hinweis, sonst der normale Name */
+    val displayName: String
+        get() = if (isJapanese && card.nameEn.isNotBlank()) "${card.name} (${card.nameEn})" else card.name
+
     val owned: Boolean get() = quantity > 0
 
     /** Varianten, die es von dieser Karte gibt (Katalog-Reihenfolge). */

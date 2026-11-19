@@ -44,6 +44,10 @@ import de.pokemoncarddetector.PokeApp
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.ImageLanguage
 import de.pokemoncarddetector.data.SyncState
+import de.pokemoncarddetector.data.prices.PriceMetric
+import de.pokemoncarddetector.data.prices.PriceRefreshState
+import de.pokemoncarddetector.ui.components.germanDateTime
+import de.pokemoncarddetector.work.PriceWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -118,6 +122,62 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             HorizontalDivider()
+            Section("Preise (Cardmarket)")
+            val priceState by container.priceRepository.state.collectAsStateWithLifecycle()
+            val lastFetch by container.priceRepository.observeLastFetch().collectAsStateWithLifecycle(null)
+            Text(
+                "Welcher Preis angezeigt und für den Sammlungswert verwendet wird",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
+            )
+            PriceMetric.entries.forEach { m ->
+                ListItem(
+                    modifier = Modifier.selectable(
+                        selected = settings.priceMetric == m,
+                        role = Role.RadioButton,
+                        onClick = { scope.launch { container.settings.setPriceMetric(m); container.priceRepository.snapshotValue() } },
+                    ),
+                    leadingContent = { RadioButton(selected = settings.priceMetric == m, onClick = null) },
+                    headlineContent = { Text(m.label) },
+                )
+            }
+            SwitchItem(
+                "Preise automatisch aktuell halten",
+                "Beim Start und einmal täglich im Hintergrund (Sammlung + Wunschliste)",
+                settings.autoPrices,
+            ) {
+                scope.launch {
+                    container.settings.setAutoPrices(it)
+                    PriceWorker.schedule(context, it)
+                }
+            }
+            ListItem(
+                headlineContent = { Text("Preise jetzt aktualisieren") },
+                supportingContent = {
+                    Column {
+                        Text(lastFetch?.let { "Zuletzt: ${germanDateTime(it)}" } ?: "Noch keine Preise geladen")
+                        when (val ps = priceState) {
+                            is PriceRefreshState.Running -> LinearProgressIndicator(
+                                progress = { if (ps.total == 0) 1f else ps.done.toFloat() / ps.total },
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            )
+                            is PriceRefreshState.Done -> Text(
+                                "${ps.updated} Karten aktualisiert" + if (ps.failed > 0) ", ${ps.failed} fehlgeschlagen" else "",
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            PriceRefreshState.Idle -> {}
+                        }
+                    }
+                },
+                trailingContent = {
+                    TextButton(
+                        onClick = { scope.launch { runCatching { container.priceRepository.refreshTracked(force = true) } } },
+                        enabled = priceState !is PriceRefreshState.Running,
+                    ) { Text("Laden") }
+                },
+            )
+
+            HorizontalDivider()
             Section("Kartendatenbank")
             ListItem(
                 headlineContent = { Text("Neue Sets herunterladen") },
@@ -168,7 +228,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             HorizontalDivider()
             Section("Über")
             Text(
-                "Kartendaten und Bilder: TCGdex (tcgdex.dev), freie Pokémon-TCG-Datenbank. " +
+                "Kartendaten, Bilder und Preise: TCGdex (tcgdex.dev), freie Pokémon-TCG-Datenbank; die Preise stammen von Cardmarket " +
+                    "und werden dort täglich aktualisiert. Japanische Karten: 121 Sets, soweit bei TCGdex vorhanden. " +
                     "Die Texterkennung läuft komplett auf deinem Handy (Google ML Kit), es werden keine Fotos hochgeladen.\n\n" +
                     "Pokémon und alle zugehörigen Namen sind Marken von Nintendo, Creatures Inc. und GAME FREAK inc. " +
                     "Diese App ist ein privates Fan-Projekt und steht in keiner Verbindung zu diesen Unternehmen.",

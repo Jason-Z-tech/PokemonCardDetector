@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CollectionsBookmark
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +55,8 @@ import de.pokemoncarddetector.ui.library.SetDetailScreen
 import de.pokemoncarddetector.ui.scan.ScanScreen
 import de.pokemoncarddetector.ui.search.SearchScreen
 import de.pokemoncarddetector.ui.settings.SettingsScreen
+import de.pokemoncarddetector.ui.stats.StatsScreen
+import de.pokemoncarddetector.ui.wishlist.WishlistScreen
 import de.pokemoncarddetector.ui.theme.AppTheme
 
 class MainActivity : ComponentActivity() {
@@ -84,6 +88,8 @@ private object Routes {
     const val SCAN = "scannen"
     const val SEARCH = "suche?q={q}"
     const val SEARCH_BASE = "suche"
+    const val WISHLIST = "wuensche"
+    const val STATS = "statistik"
     fun set(id: String) = "sammlung/set/${Uri.encode(id)}"
     fun search(q: String) = "suche?q=${Uri.encode(q)}"
 }
@@ -94,6 +100,8 @@ private val tabs = listOf(
     Tab(Routes.SCAN, "Scannen", Icons.Default.CameraAlt),
     Tab(Routes.LIBRARY_GRAPH, "Sammlung", Icons.Default.CollectionsBookmark),
     Tab(Routes.SEARCH_BASE, "Suche", Icons.Default.Search),
+    Tab(Routes.WISHLIST, "Wünsche", Icons.Default.Favorite),
+    Tab(Routes.STATS, "Statistik", Icons.Default.Insights),
 )
 
 @Composable
@@ -112,7 +120,7 @@ private fun MainScaffold() {
                         selected = selected,
                         onClick = { nav.switchTab(tab.route) },
                         icon = { Icon(tab.icon, contentDescription = null) },
-                        label = { Text(tab.label) },
+                        label = { Text(tab.label, maxLines = 1, softWrap = false) },
                     )
                 }
             }
@@ -161,6 +169,12 @@ private fun MainScaffold() {
                 arguments = listOf(navArgument("q") { type = NavType.StringType; nullable = true; defaultValue = null }),
             ) {
                 Box(Modifier.statusBarsPadding()) { SearchScreen(onOpenSet = openSet) }
+            }
+            composable(Routes.WISHLIST) {
+                Box(Modifier.statusBarsPadding()) { WishlistScreen(onOpenSet = openSet) }
+            }
+            composable(Routes.STATS) {
+                Box(Modifier.statusBarsPadding()) { StatsScreen(onOpenSet = openSet) }
             }
         }
     }

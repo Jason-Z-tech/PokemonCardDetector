@@ -16,6 +16,11 @@ object ImageUrls {
         quality: Quality,
         language: ImageLanguage,
     ): String? {
+        if (setId.startsWith("ja:") || serieId.startsWith("ja:")) {
+            // Japanische Karten: Bit 16 = Bild vorhanden, Pfade ohne "ja:"-Praefix
+            if (imageFlags and 16 == 0) return null
+            return "$ASSETS/ja/${serieId.removePrefix("ja:")}/${setId.removePrefix("ja:")}/$localId/${quality.path}.webp"
+        }
         val hasDe = imageFlags and 1 != 0
         val hasEn = imageFlags and 2 != 0
         val lang = when {

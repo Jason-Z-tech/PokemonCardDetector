@@ -275,7 +275,21 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 }
             }
             Spacer(Modifier.height(4.dp))
-            AutoAddChip(settings.autoAdd, onToggle = { vm.setAutoAdd(!settings.autoAdd) })
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AutoAddChip(settings.autoAdd, onToggle = { vm.setAutoAdd(!settings.autoAdd) })
+                FilterChip(
+                    selected = settings.scanJapanese,
+                    onClick = { vm.setJapanese(!settings.scanJapanese) },
+                    label = { Text(if (settings.scanJapanese) "Japanische Karten" else "Japanisch", maxLines = 1) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = Color.Black.copy(alpha = 0.55f),
+                        labelColor = Color.White,
+                    ),
+                )
+            }
             if (hasPermission) {
                 Surface(color = Color.Black.copy(alpha = 0.55f), contentColor = Color.White, shape = RoundedCornerShape(50)) {
                     Text(
@@ -512,7 +526,7 @@ private fun DetectionCard(
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(item.card.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(item.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${item.setName} · Nr. ${item.numberLabel}", style = MaterialTheme.typography.bodyMedium, maxLines = 2)
                     Text(
                         if (item.quantity > 0) "Du hast: ${item.quantity}×" else "Neu für deine Sammlung!",
@@ -598,7 +612,7 @@ private fun CandidateRow(item: CardItem, settings: AppSettings, isBest: Boolean,
         leadingContent = {
             CardTile(item, settings.showImages, settings.imageLanguage, Modifier.width(52.dp), dimIfMissing = false, showQuantityBadge = false)
         },
-        headlineContent = { Text(item.card.name + if (isBest) "  (bester Treffer)" else "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        headlineContent = { Text(item.displayName + if (isBest) "  (bester Treffer)" else "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             Text("${item.setName} · ${item.setRelease.take(4)} · Nr. ${item.numberLabel}" + if (item.quantity > 0) " · ${item.quantity}× im Besitz" else "")
         },

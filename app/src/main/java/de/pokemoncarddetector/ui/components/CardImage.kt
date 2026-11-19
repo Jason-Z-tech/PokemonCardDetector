@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -81,6 +83,17 @@ fun CardTile(
             )
         } else {
             TextTile(item, dim, shape)
+        }
+        if (showQuantityBadge && item.wished && !item.owned) {
+            Icon(
+                Icons.Default.Favorite,
+                contentDescription = "Auf der Wunschliste",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .size(20.dp),
+            )
         }
         if (showQuantityBadge && item.quantity > 0) {
             QuantityBadge(

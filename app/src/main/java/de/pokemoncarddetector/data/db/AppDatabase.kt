@@ -8,13 +8,19 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [SerieEntity::class, SetEntity::class, CardEntity::class, CollectionEntity::class],
-    version = 3,
+    entities = [
+        SerieEntity::class, SetEntity::class, CardEntity::class, CollectionEntity::class,
+        PriceEntity::class, WishEntity::class, ValueSnapshot::class,
+    ],
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun catalogDao(): CatalogDao
     abstract fun collectionDao(): CollectionDao
+    abstract fun priceDao(): PriceDao
+    abstract fun wishlistDao(): WishlistDao
+    abstract fun statsDao(): StatsDao
 
     companion object {
         /**
@@ -51,9 +57,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v4: Cardmarket-Preise, Wunschliste, Wertverlauf, Seltenheit (japanische Karten nutzen bestehende Tabellen). */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cards ADD COLUMN rarity TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `prices` (`cardId` TEXT NOT NULL, `variant` TEXT NOT NULL DEFAULT '', " +
+                        "`trend` REAL, `avg30` REAL, `avg7` REAL, `low` REAL, `idProduct` INTEGER, `priceDate` TEXT NOT NULL, " +
+                        "`fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`cardId`, `variant`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `wishlist` (`cardId` TEXT NOT NULL, `variant` TEXT NOT NULL DEFAULT '', " +
+                        "`addedAt` INTEGER NOT NULL, PRIMARY KEY(`cardId`, `variant`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `value_history` (`date` TEXT NOT NULL, `valueCents` INTEGER NOT NULL, " +
+                        "`uniqueCards` INTEGER NOT NULL, `copies` INTEGER NOT NULL, `pricedCards` INTEGER NOT NULL, PRIMARY KEY(`date`))"
+                )
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "karten.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }
