@@ -112,4 +112,6 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     testImplementation("junit:junit:4.13.2")
+    // TCGdex-Antworten im Test nachstellen (japanischer Online-Abgleich)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

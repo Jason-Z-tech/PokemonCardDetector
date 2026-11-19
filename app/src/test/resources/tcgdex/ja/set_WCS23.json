@@ -1,0 +1,28 @@
+{
+ "cardCount": {
+  "firstEd": 0,
+  "holo": 0,
+  "normal": 0,
+  "official": 30,
+  "reverse": 0,
+  "total": 30
+ },
+ "cards": [
+  {
+   "id": "WCS23-001",
+   "localId": "001",
+   "name": "ピカチュウex"
+  }
+ ],
+ "id": "WCS23",
+ "legal": {
+  "expanded": false,
+  "standard": false
+ },
+ "name": "ポケモンワールドチャンピオンシップス2023横浜 記念デッキ「ピカチュウ」",
+ "releaseDate": "2023-07-28",
+ "serie": {
+  "id": "SV",
+  "name": "ポケモンカードゲーム スカーレット&バイオレット"
+ }
+}

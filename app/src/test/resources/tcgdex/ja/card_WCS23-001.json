@@ -1,0 +1,18 @@
+{
+ "id": "WCS23-001",
+ "localId": "001",
+ "name": "ピカチュウex",
+ "category": "Pokemon",
+ "dexId": [
+  25
+ ],
+ "rarity": "Special illustration rare",
+ "regulationMark": "G",
+ "variants_detailed": [
+  {
+   "type": "normal",
+   "size": "standard",
+   "variantId": "generated"
+  }
+ ]
+}
