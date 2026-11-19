@@ -26,14 +26,20 @@ data class IndexCard(
     /** Name ohne Logo-Zusatz (V, VMAX, VSTAR, ex, GX ...): diese Logos sind Grafiken, OCR liest sie oft nicht. */
     val baseNorm: String = TextNorm.normalize(name.replace(SUFFIX, ""))
     val baseEnNorm: String = TextNorm.normalize(nameEn.replace(SUFFIX, ""))
-    private companion object {
+    companion object {
+        /** Logo-Zusaetze, die am Ende eines Kartennamens stehen koennen. */
+        private val LOGOS = listOf("VMAX", "VSTAR", "V-UNION", "V", "GX", "EX", "BREAK", "LV.X", "LEGENDE", "LEGEND")
+
+        /** Dieselben Logos normalisiert ("vunion", "lvx"), fuer den Vergleich mit normalisierten OCR-Zeilen. */
+        internal val LOGOS_NORM: List<String> = LOGOS.map(TextNorm::normalize)
+
         /**
          * Logo-Zusatz am Namensende. Japanische Namen haben kein Trennzeichen ("リザードンex", "ミュウツーex",
          * "モルペコV-UNION"): dort genuegt ein Kana/Kanji davor. Explizite Bereiche statt \p{IsKatakana},
          * weil das Laengenzeichen "ー" (U+30FC) zur Schrift COMMON gehoert und Android ICU-Regex nutzt.
          */
-        val SUFFIX = Regex(
-            "(?:[\\s-]+|(?<=[\\u3040-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF]))(VMAX|VSTAR|V-UNION|V|GX|EX|BREAK|LV\\.X|LEGENDE|LEGEND)$",
+        private val SUFFIX = Regex(
+            "(?:[\\s-]+|(?<=[\\u3040-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF]))(${LOGOS.joinToString("|") { it.replace(".", "\\.") }})$",
             RegexOption.IGNORE_CASE,
         )
     }
@@ -147,6 +153,13 @@ class CardMatcher(private val index: CatalogIndex) {
         const val W_HP = 12.0
         const val W_CLOSE_NUMBER = 10.0
         const val MAX_ALTERNATIVES = 8
+        /** Namensaehnlichkeit ohne Aussage (keine Namenspunkte), siehe [score] */
+        const val NEUTRAL = 0.5
+        /**
+         * KP-Angabe in einer normalisierten Zeile: "kp60", "hp330", "120hp", auch ohne lesbare Zahl am Zeilenende
+         * ("kp", "kp6o"). Kein Katalogname enthaelt so etwas.
+         */
+        val HP_MARK = Regex("(?:kp|hp)(?:[0-9]{2,3}|[0-9oqdilsz]{0,3}$)|[0-9]{2,3}(?:kp|hp)")
     }
 
     fun match(lines: List<OcrLine>): MatchResult = match(CardTextParser.parse(lines))
@@ -186,13 +199,13 @@ class CardMatcher(private val index: CatalogIndex) {
 
         // Platzhalter (Set ohne Kartenliste) mit genau passender Nummer + Gesamtzahl: sein Name ist unbekannt und
         // kann zur Zeile passen. Karten mit anderer Nummer sind dann nur eine Vermutung ("Nummer falsch gelesen")
-        // und duerfen nicht vorbeiziehen, ausser mit fast exaktem Namen oder einer Ziffer Abstand.
+        // und duerfen nicht vorbeiziehen, ausser mit exakt gelesenem Namen oder einer Ziffer Abstand.
         // Ein gelesenes Kuerzel eines anderen Sets widerspricht dem Platzhalter, dann gilt das nicht.
         val placeholderScore = candidates.values
             .filter { it.numberMatched && it.totalMatched && it.card.isPlaceholder && (codeSetIds.isEmpty() || it.codeMatched) }
             .maxOfOrNull { it.score }
         fun belowPlaceholder(c: MatchCandidate) =
-            placeholderScore != null && !c.numberMatched && c.nameScore < 0.95 && !closeNumber(c.card)
+            placeholderScore != null && !c.numberMatched && !closeNumber(c.card) && !readExactly(parsed, c.card)
 
         // 2) Nummer evtl. falsch gelesen: Karten aus Sets mit passender Gesamtzahl/Kuerzel per Name suchen
         val setsFromTotals = parsed.numbers.mapNotNull { it.total }.toSet()
@@ -245,9 +258,9 @@ class CardMatcher(private val index: CatalogIndex) {
             }
         }
 
-        // Bei Gleichstand: ist der Name sicher gelesen, widerspricht er einer anderen Karte mit derselben Nummer,
-        // einem Platzhalter (Name unbekannt) aber nicht
-        val nameRead = candidates.values.any { it.nameScore >= 0.95 }
+        // Bei Gleichstand: ist der Name sicher gelesen (exakt, oder als anderer Name als der einer Karte, z.B. mit
+        // Logo), widerspricht er einer anderen Karte mit derselben Nummer, einem Platzhalter (Name unbekannt) aber nicht
+        val nameRead = contained.contradiction || candidates.values.any { it.nameScore >= 0.95 }
         val sorted = candidates.values.sortedWith(
             compareByDescending<MatchCandidate> { it.score }
                 .thenByDescending { nameRead && it.card.isPlaceholder }
@@ -282,19 +295,49 @@ class CardMatcher(private val index: CatalogIndex) {
     }
 
     /**
-     * Wie [TextNorm.nameSimilarity], mit einer Ausnahme: steht [name] nur als Teil eines laengeren Katalognamens
-     * in der Zeile ("リザード" in "リザードンEX", "Pikachu" in "Pikachu VMAX"), dann ist die Zeile dieser laengere
-     * Name und nicht [name] mit Zusatztext (wie "Glurak" in "Glurak KP 170"). Statt der Enthalten-Regel zaehlt dann
-     * nur die Aehnlichkeit der ganzen Zeile.
-     * Nur wenn der laengere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
+     * Wie [TextNorm.nameSimilarity], mit einer Ausnahme: steht [name] nur als Teil eines anderen Namens in der Zeile,
+     * dann ist die Zeile dieser andere Name und nicht [name] mit Zusatztext (wie "Glurak" in "Glurak KP 170").
+     * Ein anderer Name ist
+     * - ein laengerer Katalogname, der [name] enthaelt ("リザード" in "リザードンEX", "Mew" in "Mewtu KP 130"), oder
+     * - [name] samt einem Logo, das nicht zu [name] gehoert ("エースバーン" oder "エースバーンV" in "エースバーンVMAX").
+     *   Das gilt auch, wenn es diesen Namen im Katalog nicht gibt (Sets ohne Kartenliste).
+     * Dann spricht die Zeile nicht fuer die Karte: [NEUTRAL], also keine Namenspunkte.
+     * Die KP-Angabe zaehlt nicht zum Namen: "Icognito KP 60" ist nicht "Icognito K".
+     * Nur wenn der andere Name mindestens ein Drittel der Zeile ausmacht: Fliesstext erwaehnt oft andere Karten
      * ("Wenn du M-Simsala-EX ... spielst" auf Simsala-EX) oder bildet zufaellig einen Namen ("Icognito Schrift").
      */
     private fun similarity(line: String, name: String, contained: ContainedNames): Double {
         val s = TextNorm.nameSimilarity(line, name)
-        if (name.isEmpty() || name.length >= line.length || !line.contains(name)) return s
-        val longer = contained.of(line).any { it.length > name.length && it.length * 3 >= line.length && it.contains(name) }
-        return if (longer) minOf(s, TextNorm.ratio(line, name)) else s
+        if (s <= NEUTRAL || name.isEmpty() || !line.contains(name)) return s
+        val core = nameParts(line).firstOrNull { it.contains(name) } ?: return s
+        if (name.length >= core.length) return s
+        fun spansLine(start: Int, end: Int) = (end - start) * 3 >= line.length
+        val longer = contained.of(core).any { it.length > name.length && spansLine(0, it.length) && it.contains(name) }
+        // Logo am Ende, [name] endet an dessen Anfang oder darin ("…v" in "…vmax"), aber nicht am Ende
+        val logo = IndexCard.LOGOS_NORM.firstOrNull { core.endsWith(it) }
+        val logoStart = core.length - (logo?.length ?: 0)
+        val withLogo = logo != null && (logoStart until core.length).any { end ->
+            val start = end - name.length
+            start in 0 until logoStart && core.startsWith(name, start) && spansLine(start, core.length)
+        }
+        if (!longer && !withLogo) return s
+        contained.contradiction = true
+        return NEUTRAL
     }
+
+    /** Teile einer normalisierten Zeile ohne die KP-Angabe ("glurakkp170" -> "glurak"). */
+    private fun nameParts(line: String): List<String> = line.split(HP_MARK)
+
+    /**
+     * Name exakt gelesen (nicht nur enthalten): eine Namenszeile ist ohne KP-Angabe der volle Name der Karte.
+     * Enthaltene Namen reichen nicht, der Rest der Zeile kann zum unbekannten Namen eines Platzhalters gehoeren.
+     */
+    private fun readExactly(parsed: ParsedCardText, card: IndexCard): Boolean =
+        parsed.nameLines.any { line ->
+            nameParts(line).any { part ->
+                listOf(card.nameNorm, card.nameEnNorm, card.aliasNameNorm).any { it.isNotEmpty() && TextNorm.ratio(part, it) >= 0.95 }
+            }
+        }
 
     /**
      * Katalognamen, die woertlich in einer (normalisierten) Namenszeile stehen: "リザードンEX" enthaelt
@@ -302,6 +345,8 @@ class CardMatcher(private val index: CatalogIndex) {
      */
     private class ContainedNames(private val index: CatalogIndex) {
         private val cache = HashMap<String, List<String>>()
+        /** true, sobald eine Zeile einem Namen widersprochen hat (sie ist dann sicher ein anderer Kartenname). */
+        var contradiction = false
         fun of(line: String): List<String> = cache.getOrPut(line) { index.nameCandidates(line).filter { line.contains(it) } }
     }
 

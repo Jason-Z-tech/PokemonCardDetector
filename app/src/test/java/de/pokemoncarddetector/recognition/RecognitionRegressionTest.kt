@@ -172,6 +172,32 @@ class RecognitionRegressionTest {
     }
 
     @Test
+    fun kpAngabeIstKeinTeilDesNamens() {
+        // Icognito/Unown (ohne Buchstaben) 30/98: "Icognito KP 60" ergibt normalisiert "icognitokp60", darin steckt
+        // "Icognito K". Die KP-Angabe gehoert nicht zum Namen, die Karte bleibt sicher
+        val cases = listOf(
+            listOf("BASIS" to 18, "Icognito KP 60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KP60" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KP" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIS" to 18, "Icognito KP 60 W" to 48, "30/98" to 12) to "xy7-30",
+            listOf("BASIC" to 18, "Unown HP 60" to 48, "30/98" to 12, "©2015 Pokémon" to 10) to "xy7-30",
+            listOf("Icognito KP 80" to 48, "072/128" to 12) to "30th-072",
+            listOf("Icognito KP 50" to 48, "54/123" to 12, "©2010 Pokémon" to 10) to "hgss1-54",
+            listOf("Icognito KP 60" to 48, "90/214" to 12, "©2018 Pokémon" to 10) to "sm8-90",
+            // der Buchstabe selbst zaehlt weiter
+            listOf("Icognito K KP 60" to 48, "68/132" to 12) to "dp3-68",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: ein echter laengerer Name vor der KP-Angabe widerspricht weiter ("Mewtu" ist nicht Mew-ex 151/165)
+        val m = matcher.match(lines("Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
+        assertFalse(m.show(), m.confident)
+    }
+
+    @Test
     fun fliesstextMitLaengeremNamenBleibtHinweis() {
         // Name unlesbar; die Faehigkeit von Simsala-EX erwaehnt M-Simsala-EX. Das ist Fliesstext, keine Namenszeile:
         // der darin enthaltene Name "Simsala EX" zaehlt weiter
