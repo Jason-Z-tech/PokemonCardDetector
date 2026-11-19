@@ -27,7 +27,15 @@ data class IndexCard(
     val baseNorm: String = TextNorm.normalize(name.replace(SUFFIX, ""))
     val baseEnNorm: String = TextNorm.normalize(nameEn.replace(SUFFIX, ""))
     private companion object {
-        val SUFFIX = Regex("[\\s-]+(VMAX|VSTAR|V-UNION|V|GX|EX|BREAK|LV\\.X|LEGENDE|LEGEND)$", RegexOption.IGNORE_CASE)
+        /**
+         * Logo-Zusatz am Namensende. Japanische Namen haben kein Trennzeichen ("リザードンex", "ミュウツーex",
+         * "モルペコV-UNION"): dort genuegt ein Kana/Kanji davor. Explizite Bereiche statt \p{IsKatakana},
+         * weil das Laengenzeichen "ー" (U+30FC) zur Schrift COMMON gehoert und Android ICU-Regex nutzt.
+         */
+        val SUFFIX = Regex(
+            "(?:[\\s-]+|(?<=[\\u3040-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF]))(VMAX|VSTAR|V-UNION|V|GX|EX|BREAK|LV\\.X|LEGENDE|LEGEND)$",
+            RegexOption.IGNORE_CASE,
+        )
     }
     /** Buchstaben-Praefix der Nummer, z.B. "TG" bei "TG05". */
     val prefix: String = key.takeWhile { it.isLetter() }
@@ -61,8 +69,8 @@ class CatalogIndex(sets: List<IndexSet>, cards: List<IndexCard>) {
     /** Eindeutige normalisierte Namen -> Karten (fuer die Suche nur per Name). */
     val cardsByName: Map<String, List<IndexCard>> = buildMap<String, MutableList<IndexCard>> {
         for (c in cards) {
-            if (c.nameNorm.length >= 3) getOrPut(c.nameNorm) { mutableListOf() }.add(c)
-            if (c.nameEnNorm.length >= 3 && c.nameEnNorm != c.nameNorm) getOrPut(c.nameEnNorm) { mutableListOf() }.add(c)
+            if (TextNorm.isSearchableName(c.nameNorm)) getOrPut(c.nameNorm) { mutableListOf() }.add(c)
+            if (TextNorm.isSearchableName(c.nameEnNorm) && c.nameEnNorm != c.nameNorm) getOrPut(c.nameEnNorm) { mutableListOf() }.add(c)
         }
     }
 
@@ -276,7 +284,7 @@ class CardMatcher(private val index: CatalogIndex) {
     }
 
     private fun bestNames(parsed: ParsedCardText): List<Pair<String, List<IndexCard>>> {
-        val lines = parsed.nameLines.take(6).filter { it.length >= 3 }
+        val lines = parsed.nameLines.take(6).filter(TextNorm::isSearchableName)
         if (lines.isEmpty()) return emptyList()
         val best = HashMap<String, Double>()
         for (line in lines) {

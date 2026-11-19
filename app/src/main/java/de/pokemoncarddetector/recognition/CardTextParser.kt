@@ -62,8 +62,14 @@ object CardTextParser {
     /** Set-Kuerzel vor Sprachcode, z.B. "PAL DE 123/193", "SVI EN", "MEG DE". */
     private val CODE_BEFORE_LANG = Regex("(?<![\\p{L}0-9])([A-Z][A-Z0-9]{1,3})\\s?[•·.]?\\s?(DE|EN|FR|IT|ES|PT|NL)(?=\\s?[0-9OQ]?[0-9])")
 
-    /** Set-Kuerzel direkt vor der Nummer, z.B. "PAF 045/091". */
-    private val CODE_BEFORE_NUMBER = Regex("(?<![\\p{L}0-9])([A-Z][A-Z0-9]{1,3})\\s+(?:[A-Z]{2}\\s+)?[0-9]{1,3}\\s?/")
+    /**
+     * Set-Kuerzel direkt vor der Nummer, z.B. "PAF 045/091", "PAL DE 123/193", japanisch mit Regelzeichen
+     * dazwischen "S8B E 001/184", "SM12A C 001/173" (bis 5 Zeichen: SM12a, SV11B). Nur bekannte Kuerzel zaehlen.
+     */
+    private val CODE_BEFORE_NUMBER = Regex("(?<![\\p{L}0-9])([A-Z][A-Z0-9]{1,4})\\s+(?:[A-Z]{1,2}\\s+)?[0-9]{1,3}\\s?/")
+
+    /** Japanische Promos: "001/SV-P", "123/S-P", "045/SM-P", "001/M-P" (Kuerzel steht hinter dem Schraegstrich). */
+    private val JA_PROMO_NUMBER = Regex("(?<![0-9])([0-9]{3})\\s?/\\s?(SV|SM|S|M)\\s?-\\s?P(?![A-Z0-9])")
 
     /** Notfall-Muster ohne Praefix-Logik, falls OCR Leerzeichen verschluckt ("SVIDE025/198"). */
     private val PLAIN_SLASH_NUMBER = Regex("([0-9]{2,3})\\s?/\\s?([0-9]{2,3})(?![0-9])")
@@ -91,16 +97,21 @@ object CardTextParser {
     private val COPYRIGHT_HINT = Regex("©|\\(C\\)|NINTENDO|POK[EÉ]MON|CREATURES|GAME ?FREAK|WIZARDS", RegexOption.IGNORE_CASE)
 
     private val LETTER = Regex("\\p{L}")
-    private val EVOLVES_FROM = Regex("^\\s*(entwickelt sich aus|entsteht aus|evolves from|put .* on the basic)\\b", RegexOption.IGNORE_CASE)
+    /** Japanisch "ヒトカゲから進化" (nicht am Zeilenende verankert, OCR haengt gern Reste an). */
+    private val EVOLVES_FROM = Regex("^\\s*(entwickelt sich aus|entsteht aus|evolves from|put .* on the basic)\\b|から進化", RegexOption.IGNORE_CASE)
     private val DIGIT = Regex("[0-9]")
 
-    /** Woerter, die oft gross auf Karten stehen, aber keine Namen sind. */
-    private val NON_NAME_WORDS = setOf(
+    /** Woerter, die oft gross auf Karten stehen, aber keine Namen sind (normalisiert verglichen). */
+    private val NON_NAME_WORDS: Set<String> = listOf(
         "basis", "basic", "phase1", "phase2", "stage1", "stage2", "trainer", "item", "unterstutzer",
         "supporter", "stadion", "stadium", "energie", "energy", "kp", "hp", "schwache", "weakness",
         "resistenz", "resistance", "ruckzug", "retreat", "pokemon", "fahigkeit", "ability",
         "werkzeug", "tool", "illus", "nintendo", "creatures", "gamefreak", "regel", "rule",
-    )
+        // Japanisch: Entwicklungsstufe, Kartenart, Spielbegriffe (Dakuten fallen beim Normalisieren weg)
+        "たね", "1進化", "2進化", "進化", "特性", "ワザ", "弱点", "抵抗力", "にげる", "ルール", "サポート",
+        "グッズ", "スタジアム", "トレーナーズ", "ポケモンのどうぐ", "ポケモン", "エネルギー", "基本エネルギー",
+        "特殊エネルギー", "ポケモンexルール", "テラスタル",
+    ).mapTo(HashSet()) { TextNorm.normalize(it) }
 
     /** "025" -> "25", "TG05" -> "TG5", "SV001" -> "SV1", "12a" -> "12A". */
     fun normalizeLocalId(id: String): String {
@@ -164,12 +175,13 @@ object CardTextParser {
                 val numDigits = toDigits(num.dropLast(suffix.length))
                 val totalDigits = toDigits(total)
                 if (!numDigits.all { it.isDigit() } || !totalDigits.all { it.isDigit() }) continue
-                // Seltenheitssymbol hinter der Gesamtzahl als Ziffer gelesen: "36/1140" -> 36/114, "12/640" -> 12/64
+                // Seltenheitssymbol hinter der Gesamtzahl als Ziffer gelesen: "36/1140" -> 36/114, "12/640" -> 12/64.
+                // Dreistellig ueber 500 kann aber auch echt sein (japanisches Set MC: 123/742): beide Lesarten
+                // behalten, die Gesamtzahl-Pruefung im Matcher verwirft die falsche.
                 var totalStr = totalDigits
                 if (totalStr.length == 4) totalStr = totalStr.take(3)
-                if ((totalStr.toIntOrNull() ?: 0) > 500 && totalStr.length == 3) totalStr = totalStr.take(2)
-                val totalInt = totalStr.toIntOrNull() ?: continue
-                if (totalInt <= 0 || totalInt > 500) continue
+                val fullTotal = totalStr.toIntOrNull() ?: continue
+                val totals = if (fullTotal > 500 && totalStr.length == 3) listOf(totalStr.take(2).toInt(), fullTotal) else listOf(fullTotal)
                 // Praefix nur behalten, wenn es auch vor der Gesamtzahl steht (TG05/TG30) oder bekannt ist.
                 val keepPrefix = when {
                     prefix.isEmpty() -> ""
@@ -178,12 +190,15 @@ object CardTextParser {
                     else -> ""
                 }
                 val number = keepPrefix + numDigits + suffix
-                val key = "$number/$totalInt"
-                if (key !in numbers) numbers[key] = CollectorNumber(number, totalInt, m.value.trim())
-                // Bekanntes Praefix ohne Wiederholung vor der Gesamtzahl kann Rest eines Kuerzels sein ("PAR 063" -> "AR063")
-                if (keepPrefix.isNotEmpty() && keepPrefix != totalPrefix) {
-                    val plainKey = "${numDigits + suffix}/$totalInt"
-                    if (plainKey !in numbers) numbers[plainKey] = CollectorNumber(numDigits + suffix, totalInt, m.value.trim())
+                for (totalInt in totals) {
+                    if (totalInt <= 0) continue
+                    val key = "$number/$totalInt"
+                    if (key !in numbers) numbers[key] = CollectorNumber(number, totalInt, m.value.trim())
+                    // Bekanntes Praefix ohne Wiederholung vor der Gesamtzahl kann Rest eines Kuerzels sein ("PAR 063" -> "AR063")
+                    if (keepPrefix.isNotEmpty() && keepPrefix != totalPrefix) {
+                        val plainKey = "${numDigits + suffix}/$totalInt"
+                        if (plainKey !in numbers) numbers[plainKey] = CollectorNumber(numDigits + suffix, totalInt, m.value.trim())
+                    }
                 }
             }
             for (m in PROMO_NUMBER.findAll(up)) {
@@ -196,6 +211,14 @@ object CardTextParser {
                 val code = m.groupValues[1].replace('Y', 'V') // "SYP" = OCR-Fehler fuer "SVP"
                 codes += code
                 val number = m.groupValues[2]
+                val key = "$code:$number"
+                if (key !in numbers) numbers[key] = CollectorNumber(number, null, m.value.trim())
+            }
+            for (m in JA_PROMO_NUMBER.findAll(up)) {
+                // "001/SV-P" -> Kuerzel "SV-P" (= Abkuerzung des Sets ja:SV-P) + Nummer ohne Gesamtzahl
+                val code = m.groupValues[2] + "-P"
+                codes += code
+                val number = m.groupValues[1]
                 val key = "$code:$number"
                 if (key !in numbers) numbers[key] = CollectorNumber(number, null, m.value.trim())
             }
@@ -301,10 +324,12 @@ object CardTextParser {
         val scored = lines.mapIndexedNotNull { index, line ->
             val text = line.text.trim()
             val letters = LETTER.findAll(text).count()
-            if (letters < 3) return@mapIndexedNotNull null
+            // Japanische Namen haben oft nur zwei Zeichen (パモ, ピィ, ネモ), lateinische Zeilen brauchen drei
+            val minLetters = if (TextNorm.containsCjk(text)) 2 else 3
+            if (letters < minLetters) return@mapIndexedNotNull null
             val digits = DIGIT.findAll(text).count()
             val norm = TextNorm.normalize(text)
-            if (norm.length < 3 || norm in NON_NAME_WORDS) return@mapIndexedNotNull null
+            if (norm.length < minLetters || norm in NON_NAME_WORDS) return@mapIndexedNotNull null
             // "Entwickelt sich aus Glutexo" / "Evolves from Charmeleon" nennt die VORSTUFE, nicht diese Karte
             if (EVOLVES_FROM.containsMatchIn(text)) return@mapIndexedNotNull null
             if (letters.toDouble() / (letters + digits) < 0.5) return@mapIndexedNotNull null

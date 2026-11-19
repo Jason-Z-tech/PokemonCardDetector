@@ -138,7 +138,7 @@ data class CardItem(
             val id = displayLocalId
             val m = NUMBER.matchEntire(id)
             if (setOfficial <= 0 || m == null) return id
-            val pad = if (serieId in PADDED_SERIES) 3 else 0
+            val pad = if (serieId in PADDED_SERIES || isPaddedJapanese(serieId)) 3 else 0
             val digits = m.groupValues[1].trimStart('0').ifEmpty { "0" }.padStart(pad, '0')
             return "$digits${m.groupValues[2]}/${setOfficial.toString().padStart(pad, '0')}"
         }
@@ -147,6 +147,10 @@ data class CardItem(
         val NUMBER = Regex("^([0-9]+)([a-zA-Z]?)$")
         /** Serien, die Nummern dreistellig drucken (025/185) */
         val PADDED_SERIES = setOf("swsh", "sv", "me")
+
+        /** Japanische Karten drucken dreistellig (006/165), ausser den ersten Serien (PMCG, neo: ohne Nummer). */
+        fun isPaddedJapanese(serieId: String): Boolean =
+            serieId.startsWith("ja:") && !serieId.startsWith("ja:PMCG") && !serieId.startsWith("ja:neo")
     }
 }
 
