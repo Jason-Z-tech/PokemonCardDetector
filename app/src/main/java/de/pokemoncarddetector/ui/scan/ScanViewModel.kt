@@ -1,0 +1,275 @@
+package de.pokemoncarddetector.ui.scan
+
+import android.content.Context
+import android.net.Uri
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageProxy
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.mlkit.vision.common.InputImage
+import de.pokemoncarddetector.data.AppSettings
+import de.pokemoncarddetector.data.CardRepository
+import de.pokemoncarddetector.data.SettingsRepository
+import de.pokemoncarddetector.data.db.CardItem
+import de.pokemoncarddetector.recognition.CardMatcher
+import de.pokemoncarddetector.recognition.CardTextRecognizer
+import de.pokemoncarddetector.recognition.CatalogIndex
+import de.pokemoncarddetector.recognition.FrameFilter
+import de.pokemoncarddetector.recognition.FrameGeometry
+import de.pokemoncarddetector.recognition.MatchResult
+import de.pokemoncarddetector.recognition.OcrLine
+import de.pokemoncarddetector.recognition.ScanStabilizer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** Erkannte Karte inkl. Alternativen. */
+data class Detection(
+    val best: CardItem,
+    val alternatives: List<CardItem>,
+    val confident: Boolean,
+    /** zaehlt hoch bei jeder neuen Erkennung (fuer Vibration) */
+    val serial: Long,
+    val fromPhoto: Boolean,
+)
+
+data class ScanUiState(
+    val detection: Detection? = null,
+    /** kurze Statuszeile, z.B. "Nummer erkannt: 025/185" */
+    val status: String = "Halte eine Karte in den Rahmen",
+    val busy: Boolean = false,
+    val paused: Boolean = false,
+    val torchOn: Boolean = false,
+)
+
+sealed interface ScanEvent {
+    data class Message(val text: String) : ScanEvent
+}
+
+class ScanViewModel(
+    private val repository: CardRepository,
+    private val settingsRepo: SettingsRepository,
+) : ViewModel() {
+
+    val recognizer = CardTextRecognizer()
+
+    val settings: StateFlow<AppSettings> = settingsRepo.settings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    private val _state = MutableStateFlow(ScanUiState())
+    val state: StateFlow<ScanUiState> = _state.asStateFlow()
+
+    private val _events = Channel<ScanEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
+
+    @Volatile var frame: FrameGeometry? = null
+
+    private val stabilizer = ScanStabilizer()
+    private val matching = AtomicBoolean(false)
+    private val matcherLock = Mutex()
+    private var matcher: CardMatcher? = null
+    private var matcherIndex: CatalogIndex? = null
+    private var serial = 0L
+    private var lastAutoAdded: String? = null
+    private var lastTentativeId: String? = null
+
+    private suspend fun matcher(): CardMatcher = matcherLock.withLock {
+        val index = repository.catalogIndex()
+        if (matcher == null || matcherIndex !== index) {
+            matcher = CardMatcher(index)
+            matcherIndex = index
+        }
+        matcher!!
+    }
+
+    // ---------------- Live-Kamera ----------------
+
+    /** Wird fuer jedes ausgewertete Kamerabild aufgerufen. */
+    fun onFrame(lines: List<OcrLine>, imageWidth: Int, imageHeight: Int) {
+        if (_state.value.paused || _state.value.busy) return
+        if (!matching.compareAndSet(false, true)) return
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val filtered = FrameFilter.filter(lines, imageWidth, imageHeight, frame)
+                val result = matcher().match(filtered)
+                handleLive(result)
+            } catch (_: Throwable) {
+                // Einzelne Bilder duerfen fehlschlagen
+            } finally {
+                matching.set(false)
+            }
+        }
+    }
+
+    private suspend fun handleLive(result: MatchResult) {
+        val stable = stabilizer.offer(result)
+        if (stabilizer.isIdle()) {
+            lastAutoAdded = null
+            lastTentativeId = null
+            // Unsichere Vorschlaege verschwinden, wenn keine Karte mehr im Bild ist
+            _state.update { s -> if (s.detection?.confident == false && !s.detection.fromPhoto) s.copy(detection = null) else s }
+        }
+        _state.update { it.copy(status = statusFor(result)) }
+
+        if (stable?.best != null) {
+            val id = stable.best.card.id
+            val current = _state.value.detection
+            if (current == null || current.best.card.id != id || !current.confident) {
+                showDetection(stable, fromPhoto = false)
+            }
+            if (settings.value.autoAdd && lastAutoAdded != id) {
+                lastAutoAdded = id
+                add(id)
+            }
+        } else if (result.best != null && !result.confident && result.best.nameScore >= 0.85) {
+            // Unsicherer Treffer (z.B. Nummer nicht lesbar): als Vorschlag zeigen, wenn nichts Sicheres da ist
+            val current = _state.value.detection
+            val id = result.best.card.id
+            if ((current == null || !current.confident) && id != lastTentativeId) {
+                lastTentativeId = id
+                showDetection(result, fromPhoto = false)
+            }
+        }
+    }
+
+    private fun statusFor(result: MatchResult): String {
+        val p = result.parsed
+        return when {
+            p.isEmpty -> "Halte eine Karte in den Rahmen"
+            result.confident && result.best != null -> "Erkannt: ${result.best.card.name}"
+            p.numbers.isNotEmpty() -> "Nummer gelesen: ${p.numbers.first().raw} – suche Karte …"
+            else -> "Text erkannt – halte die Karte ruhig, Nummer unten gut sichtbar"
+        }
+    }
+
+    private suspend fun showDetection(result: MatchResult, fromPhoto: Boolean) {
+        val best = result.best ?: return
+        val ids = listOf(best.card.id) + result.alternatives.map { it.card.id }
+        val items = repository.cardsByIds(ids).associateBy { it.card.id }
+        val bestItem = items[best.card.id] ?: return
+        val alternatives = result.alternatives.mapNotNull { items[it.card.id] }
+        _state.update {
+            it.copy(
+                detection = Detection(bestItem, alternatives, result.confident, ++serial, fromPhoto),
+            )
+        }
+    }
+
+    // ---------------- Foto / Galerie ----------------
+
+    @OptIn(ExperimentalGetImage::class)
+    fun analyzeCapture(proxy: ImageProxy) {
+        val media = proxy.image
+        if (media == null) {
+            proxy.close(); return
+        }
+        val rotation = proxy.imageInfo.rotationDegrees
+        val (w, h) = if (rotation % 180 == 0) proxy.width to proxy.height else proxy.height to proxy.width
+        val input = InputImage.fromMediaImage(media, rotation)
+        analyzeSingle(onDone = { proxy.close() }) {
+            FrameFilter.filter(recognizer.recognize(input), w, h, frame)
+        }
+    }
+
+    fun analyzeUri(context: Context, uri: Uri) {
+        analyzeSingle { recognizer.recognize(context, uri) }
+    }
+
+    private fun analyzeSingle(onDone: () -> Unit = {}, recognize: suspend () -> List<OcrLine>) {
+        _state.update { it.copy(busy = true, status = "Foto wird ausgewertet …") }
+        viewModelScope.launch {
+            try {
+                val lines = recognize()
+                val result = withContext(Dispatchers.Default) { matcher().match(lines) }
+                if (result.best == null) {
+                    _state.update { it.copy(status = "Keine Karte erkannt") }
+                    _events.send(
+                        ScanEvent.Message("Keine Karte erkannt. Tipp: näher ran, gutes Licht, Nummer unten links/rechts muss scharf sein.")
+                    )
+                } else {
+                    showDetection(result, fromPhoto = true)
+                    _state.update { it.copy(status = if (result.confident) "Erkannt: ${result.best.card.name}" else "Bitte Treffer prüfen") }
+                }
+            } catch (t: Throwable) {
+                _events.send(ScanEvent.Message("Bild konnte nicht gelesen werden: ${t.message ?: "Fehler"}"))
+            } finally {
+                onDone()
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    // ---------------- Aktionen ----------------
+
+    fun add(cardId: String) {
+        viewModelScope.launch {
+            val qty = repository.add(cardId, 1)
+            val item = repository.cardsByIds(listOf(cardId)).firstOrNull()
+            refreshDetection()
+            if (item != null) {
+                _events.send(ScanEvent.Message("${item.card.name} (${item.setName}) hinzugefügt – jetzt ${qty}×"))
+            }
+        }
+    }
+
+    /** Waehlt eine Alternative als richtigen Treffer. */
+    fun choose(cardId: String) {
+        viewModelScope.launch {
+            val d = _state.value.detection ?: return@launch
+            val all = (listOf(d.best) + d.alternatives)
+            val chosen = all.firstOrNull { it.card.id == cardId } ?: return@launch
+            _state.update {
+                it.copy(detection = d.copy(best = chosen, alternatives = all - chosen, confident = true))
+            }
+        }
+    }
+
+    private suspend fun refreshDetection() {
+        val d = _state.value.detection ?: return
+        val ids = listOf(d.best.card.id) + d.alternatives.map { it.card.id }
+        val items = repository.cardsByIds(ids).associateBy { it.card.id }
+        _state.update { s ->
+            val cur = s.detection ?: return@update s
+            s.copy(
+                detection = cur.copy(
+                    best = items[cur.best.card.id] ?: cur.best,
+                    alternatives = cur.alternatives.map { items[it.card.id] ?: it },
+                ),
+            )
+        }
+    }
+
+    fun dismissDetection() {
+        stabilizer.reset()
+        lastTentativeId = null
+        _state.update { it.copy(detection = null, status = "Halte eine Karte in den Rahmen") }
+    }
+
+    fun setPaused(paused: Boolean) {
+        _state.update { it.copy(paused = paused) }
+        if (!paused) viewModelScope.launch { refreshDetection() }
+    }
+
+    fun setTorch(on: Boolean) = _state.update { it.copy(torchOn = on) }
+
+    fun setAutoAdd(on: Boolean) {
+        viewModelScope.launch { settingsRepo.setAutoAdd(on) }
+    }
+
+    override fun onCleared() {
+        recognizer.close()
+        super.onCleared()
+    }
+}

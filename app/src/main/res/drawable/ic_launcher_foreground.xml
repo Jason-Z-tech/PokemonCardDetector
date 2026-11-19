@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Stilisierte Karte mit Scan-Rahmen -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Karte -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M42,30 L66,30 Q70,30 70,34 L70,74 Q70,78 66,78 L42,78 Q38,78 38,74 L38,34 Q38,30 42,30 Z" />
+    <!-- Ball oben (rot) -->
+    <path
+        android:fillColor="#FFE3350D"
+        android:pathData="M45,52 A9,9 0 0,1 63,52 Z" />
+    <!-- Ball unten -->
+    <path
+        android:fillColor="#FF2A2A2A"
+        android:pathData="M45,52 L63,52 L63,53.5 L45,53.5 Z" />
+    <path
+        android:fillColor="#FF2A2A2A"
+        android:pathData="M54,49 A3.5,3.5 0 1,1 53.99,49 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,50.8 A1.7,1.7 0 1,1 53.99,50.8 Z" />
+    <!-- Scan-Ecken -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M30,32 L30,24 L38,24 M70,24 L78,24 L78,32 M78,76 L78,84 L70,84 M38,84 L30,84 L30,76" />
+</vector>
