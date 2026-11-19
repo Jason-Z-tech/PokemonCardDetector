@@ -150,7 +150,7 @@ fun CardSheet(cardId: String, onDismiss: () -> Unit, onOpenSet: ((String) -> Uni
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    card.card.name,
+                    card.displayName,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f, fill = false),

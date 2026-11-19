@@ -123,7 +123,7 @@ class SearchViewModel(
         val variant = item.defaultVariant
         repository.add(item.card.id, variant, 1)
         val variantText = if (item.variantList.size > 1) " als ${Variants.shortLabel(variant)}" else ""
-        _events.send(SearchEvent.Added("${item.card.name}$variantText hinzugefügt", item.card.id, before))
+        _events.send(SearchEvent.Added("${item.displayName}$variantText hinzugefügt", item.card.id, before))
     }
 
     fun undo(cardId: String, previous: List<CollectionEntity>) = viewModelScope.launch { repository.restore(cardId, previous) }

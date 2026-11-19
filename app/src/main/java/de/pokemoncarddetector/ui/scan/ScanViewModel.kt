@@ -157,7 +157,7 @@ class ScanViewModel(
         val p = result.parsed
         return when {
             p.isEmpty -> "Halte eine Karte in den Rahmen"
-            result.confident && result.best != null -> "Erkannt: ${result.best.card.name}"
+            result.confident && result.best != null -> "Erkannt: ${result.best.card.name.ifBlank { "Nr. " + result.best.card.localId }}"
             p.numbers.isNotEmpty() -> "Nummer gelesen: ${p.numbers.first().raw} – suche Karte …"
             else -> "Text erkannt – halte die Karte ruhig, Nummer unten gut sichtbar"
         }
@@ -222,7 +222,7 @@ class ScanViewModel(
                     )
                 } else {
                     showDetection(result, fromPhoto = true)
-                    _state.update { it.copy(status = if (result.confident) "Erkannt: ${result.best.card.name}" else "Bitte Treffer prüfen") }
+                    _state.update { it.copy(status = if (result.confident) "Erkannt: ${result.best.card.name.ifBlank { "Nr. " + result.best.card.localId }}" else "Bitte Treffer prüfen") }
                 }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
@@ -246,7 +246,7 @@ class ScanViewModel(
             val qty = repository.add(cardId, v, 1)
             refreshDetection()
             val variantText = if (item.variantList.size > 1 || v.isBlank()) " (${Variants.shortLabel(v)})" else ""
-            _events.send(ScanEvent.Added("${item.card.name}$variantText hinzugefügt – jetzt ${qty}×", cardId, before))
+            _events.send(ScanEvent.Added("${item.displayName}$variantText hinzugefügt – jetzt ${qty}×", cardId, before))
         }
     }
 

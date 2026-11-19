@@ -109,9 +109,14 @@ data class CardItem(
     /** Japanische Karte (eigener Katalog, IDs mit "ja:") */
     val isJapanese: Boolean get() = card.setId.startsWith("ja:")
 
-    /** Japanischer Name + deutscher Hinweis, sonst der normale Name */
+    /** Japanischer Name + deutscher Hinweis, sonst der normale Name; ohne Namen (Platzhalter) die Nummer */
     val displayName: String
-        get() = if (isJapanese && card.nameEn.isNotBlank()) "${card.name} (${card.nameEn})" else card.name
+        get() = when {
+            isJapanese && card.name.isNotBlank() && card.nameEn.isNotBlank() -> "${card.name} (${card.nameEn})"
+            card.name.isNotBlank() -> card.name
+            card.nameEn.isNotBlank() -> card.nameEn
+            else -> "Karte Nr. $displayLocalId"
+        }
 
     val owned: Boolean get() = quantity > 0
 

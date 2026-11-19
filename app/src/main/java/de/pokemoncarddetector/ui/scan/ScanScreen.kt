@@ -322,7 +322,7 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                     onDismiss = vm::dismissDetection,
                     onAlternatives = { showAlternatives = true },
                     onOpen = { openCard = detection.best.card.id },
-                    onSearch = { onSearch(detection.best.card.name) },
+                    onSearch = { onSearch(detection.best.card.nameEn.ifBlank { detection.best.card.name }) },
                 )
                 Spacer(Modifier.height(10.dp))
             }
@@ -341,7 +341,7 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                     settings = settings,
                     onChoose = { vm.choose(it); showAlternatives = false },
                     onAdd = { vm.add(it) },
-                    onSearch = { showAlternatives = false; onSearch(d.best.card.name) },
+                    onSearch = { showAlternatives = false; onSearch(d.best.card.nameEn.ifBlank { d.best.card.name }) },
                 )
             }
         }

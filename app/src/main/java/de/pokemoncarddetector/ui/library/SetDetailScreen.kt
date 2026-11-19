@@ -206,7 +206,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                             } else {
                                 vm.markOwned(item)
                                 scope.launch {
-                                    val r = snackbar.showSnackbar("${item.card.name} hinzugefügt", actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
+                                    val r = snackbar.showSnackbar("${item.displayName} hinzugefügt", actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
                                     if (r == SnackbarResult.ActionPerformed) vm.unmark(item)
                                 }
                             }

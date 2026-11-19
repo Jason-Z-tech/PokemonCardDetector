@@ -71,7 +71,7 @@ fun CardTile(
         if (url != null && !failed) {
             AsyncImage(
                 model = url,
-                contentDescription = item.card.name,
+                contentDescription = item.displayName,
                 contentScale = ContentScale.Fit,
                 colorFilter = if (dim) grayscale else null,
                 onError = { failed = true },
