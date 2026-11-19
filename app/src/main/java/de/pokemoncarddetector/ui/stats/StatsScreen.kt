@@ -65,12 +65,12 @@ import de.pokemoncarddetector.ui.components.euro
 import de.pokemoncarddetector.ui.components.euroRounded
 import de.pokemoncarddetector.ui.components.germanDate
 import de.pokemoncarddetector.ui.components.germanDateTime
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -111,7 +111,6 @@ private data class Inputs(
     val wishCards: List<CardItem>,
 )
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class StatsViewModel(
     private val repository: CardRepository,
     private val prices: PriceRepository,
@@ -142,7 +141,9 @@ class StatsViewModel(
         )
     }
 
-    private val computed: Flow<StatsUiState> = inputs.mapLatest { i ->
+    // conflate statt mapLatest: jede Berechnung laeuft zu Ende, danach wird nur der neueste Stand gerechnet
+    // (beim Preis-Laden aendert sich laufend etwas – mapLatest wuerde dann nie fertig)
+    private val computed: Flow<StatsUiState> = inputs.conflate().map { i ->
         val metric = i.settings.priceMetric
         val value = collectionValue(i.rows, i.prices, metric)
         val pricesByCard = i.prices.groupBy { it.cardId }
