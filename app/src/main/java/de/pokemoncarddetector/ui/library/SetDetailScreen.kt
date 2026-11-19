@@ -2,6 +2,17 @@ package de.pokemoncarddetector.ui.library
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,9 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -96,10 +104,10 @@ class SetDetailViewModel(
 
     fun setFilter(f: CardFilter) { filter.value = f }
     fun toggleImages() = viewModelScope.launch { settingsRepo.setShowImages(!state.value.settings.showImages) }
-    /** Langes Druecken: Karte direkt an/aus (0 <-> 1) */
-    fun toggleOwned(item: CardItem) = viewModelScope.launch {
-        repository.setQuantity(item.card.id, if (item.owned) 0 else 1)
-    }
+
+    /** Langes Druecken auf eine fehlende Karte: direkt als "habe ich" (1x) markieren. */
+    fun markOwned(item: CardItem) = viewModelScope.launch { repository.setQuantity(item.card.id, 1) }
+    fun setQuantity(cardId: String, quantity: Int) = viewModelScope.launch { repository.setQuantity(cardId, quantity) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -109,7 +117,10 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     var openCard by rememberSaveable { mutableStateOf<String?>(null) }
     val haptics = LocalHapticFeedback.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             navigationIcon = {
@@ -144,22 +155,23 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
         )
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                CardFilter.entries.forEachIndexed { i, f ->
-                    SegmentedButton(
-                        selected = state.filter == f,
-                        onClick = { vm.setFilter(f) },
-                        shape = SegmentedButtonDefaults.itemShape(i, CardFilter.entries.size),
-                    ) {
-                        val count = when (f) {
-                            CardFilter.ALL -> state.allCount
-                            CardFilter.OWNED -> state.ownedCount
-                            CardFilter.MISSING -> state.allCount - state.ownedCount
-                        }
-                        Text("${f.label} ($count)", maxLines = 1)
-                    }
+        Row(
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CardFilter.entries.forEach { f ->
+                val count = when (f) {
+                    CardFilter.ALL -> state.allCount
+                    CardFilter.OWNED -> state.ownedCount
+                    CardFilter.MISSING -> state.allCount - state.ownedCount
                 }
+                FilterChip(
+                    selected = state.filter == f,
+                    onClick = { vm.setFilter(f) },
+                    label = { Text("${f.label} ($count)", maxLines = 1, softWrap = false) },
+                )
             }
         }
         if (state.copies > state.ownedCount) {
@@ -170,7 +182,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
             )
         }
         Text(
-            "Tippen = Details & Anzahl · Lange drücken = an/aus",
+            "Tippen = Details & Anzahl · Lange drücken = als „habe ich“ markieren",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -188,7 +200,16 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                         onClick = { openCard = item.card.id },
                         onLongClick = {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            vm.toggleOwned(item)
+                            if (item.owned) {
+                                // Anzahl nie aus Versehen loeschen: Besessene Karten oeffnen die Details
+                                openCard = item.card.id
+                            } else {
+                                vm.markOwned(item)
+                                scope.launch {
+                                    val r = snackbar.showSnackbar("${item.card.name} hinzugefügt", actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
+                                    if (r == SnackbarResult.ActionPerformed) vm.setQuantity(item.card.id, 0)
+                                }
+                            }
                         },
                     ),
                 ) {
@@ -207,5 +228,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
         }
     }
 
+    SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp))
+    }
     openCard?.let { id -> CardSheet(cardId = id, onDismiss = { openCard = null }) }
 }

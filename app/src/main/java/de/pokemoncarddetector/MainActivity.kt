@@ -1,5 +1,6 @@
 package de.pokemoncarddetector
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,8 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CollectionsBookmark
@@ -54,7 +54,6 @@ import de.pokemoncarddetector.ui.scan.ScanScreen
 import de.pokemoncarddetector.ui.search.SearchScreen
 import de.pokemoncarddetector.ui.settings.SettingsScreen
 import de.pokemoncarddetector.ui.theme.AppTheme
-import java.net.URLEncoder
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,8 +84,8 @@ private object Routes {
     const val SCAN = "scannen"
     const val SEARCH = "suche?q={q}"
     const val SEARCH_BASE = "suche"
-    fun set(id: String) = "sammlung/set/${URLEncoder.encode(id, "UTF-8")}"
-    fun search(q: String) = "suche?q=${URLEncoder.encode(q, "UTF-8")}"
+    fun set(id: String) = "sammlung/set/${Uri.encode(id)}"
+    fun search(q: String) = "suche?q=${Uri.encode(q)}"
 }
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
@@ -119,48 +118,63 @@ private fun MainScaffold() {
             }
         },
     ) { padding ->
-        val isScan = current?.route == Routes.SCAN
+        // Sets aus anderen Tabs immer im Sammlung-Tab oeffnen (Zurueck fuehrt dann zur Uebersicht)
+        val openSet: (String) -> Unit = { id ->
+            nav.switchTab(Routes.LIBRARY_GRAPH)
+            nav.navigate(Routes.set(id)) { launchSingleTop = true }
+        }
+        // Suche aus dem Scanner: Suche-Tab mit neuem Suchbegriff
+        val openSearch: (String) -> Unit = { q ->
+            nav.navigate(Routes.search(q)) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+            }
+        }
         NavHost(
             navController = nav,
             startDestination = Routes.SCAN,
-            modifier = Modifier
-                .padding(padding)
-                .then(if (isScan) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)),
+            modifier = Modifier.padding(padding),
         ) {
             composable(Routes.SCAN) {
-                ScanScreen(
-                    onSearch = { q -> nav.navigate(Routes.search(q)) { launchSingleTop = true } },
-                    onOpenSet = { nav.navigate(Routes.set(it)) },
-                )
+                ScanScreen(onSearch = openSearch, onOpenSet = openSet)
             }
             navigation(startDestination = Routes.LIBRARY, route = Routes.LIBRARY_GRAPH) {
                 composable(Routes.LIBRARY) {
-                    LibraryScreen(
-                        onOpenSet = { nav.navigate(Routes.set(it)) },
-                        onOpenSettings = { nav.navigate(Routes.SETTINGS) },
-                    )
+                    Box(Modifier.statusBarsPadding()) {
+                        LibraryScreen(
+                            onOpenSet = { nav.navigate(Routes.set(it)) },
+                            onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                        )
+                    }
                 }
                 composable(Routes.SET, arguments = listOf(navArgument("setId") { type = NavType.StringType })) { entry ->
-                    SetDetailScreen(setId = entry.arguments?.getString("setId").orEmpty(), onBack = { nav.popBackStack() })
+                    Box(Modifier.statusBarsPadding()) {
+                        SetDetailScreen(setId = entry.arguments?.getString("setId").orEmpty(), onBack = { nav.popBackStack() })
+                    }
                 }
-                composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
+                composable(Routes.SETTINGS) {
+                    Box(Modifier.statusBarsPadding()) { SettingsScreen(onBack = { nav.popBackStack() }) }
+                }
             }
             composable(
                 Routes.SEARCH,
                 arguments = listOf(navArgument("q") { type = NavType.StringType; nullable = true; defaultValue = null }),
-            ) { entry ->
-                SearchScreen(
-                    initialQuery = entry.arguments?.getString("q"),
-                    onOpenSet = { nav.navigate(Routes.set(it)) },
-                )
+            ) {
+                Box(Modifier.statusBarsPadding()) { SearchScreen(onOpenSet = openSet) }
             }
         }
     }
 }
 
 private fun NavHostController.switchTab(route: String) {
+    val start = graph.findStartDestination().id
+    if (route == Routes.SCAN) {
+        // Zurueck zum Scanner (Start-Ziel); den Stapel des aktuellen Tabs fuer spaeter merken
+        popBackStack(start, inclusive = false, saveState = true)
+        return
+    }
     navigate(route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
+        popUpTo(start) { saveState = true }
         launchSingleTop = true
         restoreState = true
     }

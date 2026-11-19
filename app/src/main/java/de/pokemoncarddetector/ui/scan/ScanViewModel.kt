@@ -53,6 +53,8 @@ data class ScanUiState(
 
 sealed interface ScanEvent {
     data class Message(val text: String) : ScanEvent
+    /** Karte hinzugefuegt – mit "Rueckgaengig" auf [previousQuantity] */
+    data class Added(val text: String, val cardId: String, val previousQuantity: Int) : ScanEvent
 }
 
 class ScanViewModel(
@@ -81,6 +83,8 @@ class ScanViewModel(
     private var serial = 0L
     private var lastAutoAdded: String? = null
     private var lastTentativeId: String? = null
+    /** Vom Nutzer gewaehlte Karte: bleibt stehen, bis die Karte aus dem Bild genommen wird */
+    private var userChoice: String? = null
 
     private suspend fun matcher(): CardMatcher = matcherLock.withLock {
         val index = repository.catalogIndex()
@@ -117,10 +121,12 @@ class ScanViewModel(
         if (stabilizer.isIdle()) {
             lastAutoAdded = null
             lastTentativeId = null
+            userChoice = null
             // Unsichere Vorschlaege verschwinden, wenn keine Karte mehr im Bild ist
             _state.update { s -> if (s.detection?.confident == false && !s.detection.fromPhoto) s.copy(detection = null) else s }
         }
         _state.update { it.copy(status = statusFor(result)) }
+        if (userChoice != null) return // Nutzer hat korrigiert – nicht ueberschreiben
 
         if (stable?.best != null) {
             val id = stable.best.card.id
@@ -229,12 +235,20 @@ class ScanViewModel(
 
     fun add(cardId: String) {
         viewModelScope.launch {
+            val before = repository.cardsByIds(listOf(cardId)).firstOrNull()?.quantity ?: 0
             val qty = repository.add(cardId, 1)
             val item = repository.cardsByIds(listOf(cardId)).firstOrNull()
             refreshDetection()
             if (item != null) {
-                _events.send(ScanEvent.Message("${item.card.name} (${item.setName}) hinzugefügt – jetzt ${qty}×"))
+                _events.send(ScanEvent.Added("${item.card.name} (${item.setName}) hinzugefügt – jetzt ${qty}×", cardId, before))
             }
+        }
+    }
+
+    fun setQuantity(cardId: String, quantity: Int) {
+        viewModelScope.launch {
+            repository.setQuantity(cardId, quantity)
+            refreshDetection()
         }
     }
 
@@ -244,8 +258,17 @@ class ScanViewModel(
             val d = _state.value.detection ?: return@launch
             val all = (listOf(d.best) + d.alternatives)
             val chosen = all.firstOrNull { it.card.id == cardId } ?: return@launch
+            val replaced = d.best.card.id
+            stabilizer.reset()
+            userChoice = cardId
             _state.update {
                 it.copy(detection = d.copy(best = chosen, alternatives = all - chosen, confident = true))
+            }
+            // Wurde die falsche Karte schon automatisch hinzugefuegt? Dann umbuchen.
+            if (lastAutoAdded == replaced && replaced != cardId) {
+                repository.add(replaced, -1)
+                lastAutoAdded = cardId
+                add(cardId)
             }
         }
     }
@@ -268,6 +291,7 @@ class ScanViewModel(
     fun dismissDetection() {
         stabilizer.reset()
         lastTentativeId = null
+        userChoice = null
         _state.update { it.copy(detection = null, status = "Halte eine Karte in den Rahmen") }
     }
 

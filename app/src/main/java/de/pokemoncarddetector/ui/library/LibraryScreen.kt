@@ -81,7 +81,8 @@ class LibraryViewModel(
     private val settingsRepo: SettingsRepository,
 ) : ViewModel() {
 
-    private val query = MutableStateFlow("")
+    /** Suchtext separat, damit das Textfeld synchron bleibt */
+    val query = MutableStateFlow("")
 
     val state: StateFlow<LibraryUiState> = combine(
         repository.observeSets(),
@@ -124,6 +125,7 @@ class LibraryViewModel(
 fun LibraryScreen(onOpenSet: (String) -> Unit, onOpenSettings: () -> Unit) {
     val vm = appViewModel { c, _ -> LibraryViewModel(c.repository, c.settings) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val query by vm.query.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -146,12 +148,12 @@ fun LibraryScreen(onOpenSet: (String) -> Unit, onOpenSettings: () -> Unit) {
             item(key = "filter") {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     OutlinedTextField(
-                        value = state.query,
+                        value = query,
                         onValueChange = vm::setQuery,
                         placeholder = { Text("Set suchen, z. B. Farbenschock") },
                         leadingIcon = { Icon(Icons.Default.Search, null) },
                         trailingIcon = {
-                            if (state.query.isNotEmpty()) {
+                            if (query.isNotEmpty()) {
                                 IconButton(onClick = { vm.setQuery("") }) { Icon(Icons.Default.Close, "Leeren") }
                             }
                         },
@@ -167,7 +169,13 @@ fun LibraryScreen(onOpenSet: (String) -> Unit, onOpenSettings: () -> Unit) {
             if (!state.loading && state.sections.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        if (state.settings.onlyOwnedSets) "Noch keine Karten gesammelt. Scanne deine erste Karte!" else "Kein Set gefunden.",
+                        when {
+                            state.settings.onlyOwnedSets && state.totals.uniqueCards == 0 ->
+                                "Noch keine Karten gesammelt. Scanne deine erste Karte!"
+                            state.settings.onlyOwnedSets ->
+                                "Keins deiner Sets passt zu „${state.query}“. Tipp: „Alle Sets“ wählen."
+                            else -> "Kein Set gefunden."
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.padding(24.dp),
                     )

@@ -201,7 +201,7 @@ private suspend fun doImport(context: android.content.Context, container: de.pok
         }
         container.repository.importJson(text, replace)
     }
-    val msg = result.fold({ "$it Karten geladen" }, { "Keine gültige Sicherungsdatei" })
+    val msg = result.fold({ if (it == 1) "1 Karte geladen" else "$it Karten geladen" }, { "Keine gültige Sicherungsdatei" })
     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
 }
 

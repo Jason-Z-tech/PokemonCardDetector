@@ -70,7 +70,9 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -103,6 +105,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.pokemoncarddetector.data.AppSettings
@@ -146,7 +149,23 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        vm.events.collect { e -> if (e is ScanEvent.Message) snackbar.showSnackbar(e.text) }
+        vm.events.collect { e ->
+            when (e) {
+                is ScanEvent.Message -> snackbar.showSnackbar(e.text)
+                is ScanEvent.Added -> {
+                    val r = snackbar.showSnackbar(e.text, actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
+                    if (r == SnackbarResult.ActionPerformed) vm.setQuantity(e.cardId, e.previousQuantity)
+                }
+            }
+        }
+    }
+    // Kamera-Bildschirm ist dunkel: helle Symbole in der Statusleiste
+    DisposableEffect(view) {
+        val window = (view.context as? android.app.Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        val old = controller?.isAppearanceLightStatusBars
+        controller?.isAppearanceLightStatusBars = false
+        onDispose { if (old != null) controller.isAppearanceLightStatusBars = old }
     }
     // Kurze Vibration bei neuer Erkennung
     LaunchedEffect(state.detection?.serial) {
@@ -173,8 +192,10 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 cameraError = "Kamera konnte nicht gestartet werden – nutze die Galerie."
                 return@addListener
             }
-            if (!controller.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && controller.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-                controller.cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+            runCatching {
+                if (!controller.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && controller.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                    controller.cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                }
             }
             cameraReady = true
         }, ContextCompat.getMainExecutor(context))
@@ -351,9 +372,11 @@ private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraControll
     }
     // ML Kit soll Koordinaten im Hochformat der Vorschau liefern (App ist auf Hochformat fixiert),
     // auch wenn das Handy gedreht wird -> feste Drehung = Sensorausrichtung
+    val hostView = LocalView.current
     LaunchedEffect(controller) {
         while (controller.cameraInfo == null) kotlinx.coroutines.delay(100)
-        vm.recognizer.fixedRotationDegrees = controller.cameraInfo?.sensorRotationDegrees
+        val displayRotation = hostView.display?.rotation ?: android.view.Surface.ROTATION_0
+        vm.recognizer.fixedRotationDegrees = runCatching { controller.cameraInfo?.getSensorRotationDegrees(displayRotation) }.getOrNull()
     }
 
     val density = LocalDensity.current

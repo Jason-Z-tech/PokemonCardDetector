@@ -7,6 +7,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
+/** Verstaendlichere deutsche Serien-Namen als die Rohdaten von TCGdex (dort z.B. "Grund"). */
+fun germanSerieName(id: String, name: String): String = when (id) {
+    "base" -> "Grundset-Ära"
+    "gym" -> "Gym-Serie"
+    "neo" -> "Neo-Serie"
+    "lc" -> "Legendary Collection"
+    "ecard" -> "e-Card-Serie"
+    "ex" -> "EX-Serie"
+    "pop" -> "POP-Serie"
+    "tk" -> "Trainer-Kits"
+    "mc" -> "McDonald's-Kollektionen"
+    "misc" -> "Sonstiges"
+    else -> name
+}
+
 /** Schreibt Katalogdaten (aus der App-Datei oder online) in die Datenbank. */
 class CatalogStore(private val context: Context, private val db: AppDatabase) {
 
@@ -40,7 +55,7 @@ class CatalogStore(private val context: Context, private val db: AppDatabase) {
     suspend fun write(series: List<CatalogSerie>, sets: List<SetPayload>, removeMissing: Boolean, onProgress: (Float) -> Unit = {}) =
         withContext(Dispatchers.IO) {
             val dao = db.catalogDao()
-            db.withTransaction { dao.upsertSeries(series.map { it.toEntity() }) }
+            db.withTransaction { dao.upsertSeries(series.map { it.copy(name = germanSerieName(it.id, it.name)).toEntity() }) }
             // In Bloecken schreiben, damit der Fortschritt angezeigt werden kann
             sets.chunked(20).forEachIndexed { chunkIndex, chunk ->
                 db.withTransaction {

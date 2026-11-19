@@ -105,7 +105,7 @@ interface CatalogDao {
         LEFT JOIN collection col ON col.cardId = c.id
         WHERE (:query != '' AND c.searchKey LIKE '%' || :query || '%')
            OR (:numberKey != '' AND c.numberKey = :numberKey AND (:total = 0 OR s.officialCount = :total))
-        ORDER BY (COALESCE(col.quantity, 0) > 0) DESC, s.releaseDate DESC, c.sortIndex
+        ORDER BY s.releaseDate DESC, s.id, c.sortIndex
         LIMIT 300
         """
     )
