@@ -24,6 +24,17 @@ object TextNorm {
         return sb.toString()
     }
 
+    /** Kana (inkl. Laengenzeichen "ー") oder Kanji. */
+    fun isCjk(c: Char): Boolean = c in '\u3040'..'\u30FF' || c in '\u3400'..'\u4DBF' || c in '\u4E00'..'\u9FFF'
+
+    fun containsCjk(s: String): Boolean = s.any(::isCjk)
+
+    /**
+     * Lang genug fuer die Namenssuche: lateinisch ab 3 Zeichen, japanisch schon ab 2
+     * (viele Namen haben nur zwei Kana: パモ, ピィ, ネモ, タロ).
+     */
+    fun isSearchableName(norm: String): Boolean = norm.length >= 3 || (norm.length == 2 && norm.all(::isCjk))
+
     fun levenshtein(a: String, b: String): Int {
         if (a == b) return 0
         if (a.isEmpty()) return b.length
@@ -81,7 +92,14 @@ object TextNorm {
     fun nameSimilarity(lineNorm: String, nameNorm: String): Double {
         if (lineNorm.isEmpty() || nameNorm.isEmpty()) return 0.0
         if (lineNorm == nameNorm) return 1.0
-        if (nameNorm.length < 3) return 0.0
+        if (nameNorm.length < 3) {
+            // Zwei-Kana-Namen ("ハモ") nur, wenn der Rest der Zeile kein Kana/Kanji ist ("ハモhp70"):
+            // sonst steckt "カイ" in "カイリュー" oder "タロ" in jeder Zeile mit diesen Zeichen.
+            if (!isSearchableName(nameNorm)) return 0.0
+            val i = lineNorm.indexOf(nameNorm)
+            if (i < 0 || containsCjk(lineNorm.removeRange(i, i + nameNorm.length))) return 0.0
+            return 0.85 + 0.15 * nameNorm.length / lineNorm.length
+        }
         if (lineNorm.contains(nameNorm)) {
             return 0.85 + 0.15 * nameNorm.length / lineNorm.length
         }
