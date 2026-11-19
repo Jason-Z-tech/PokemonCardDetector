@@ -39,6 +39,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import javax.net.ssl.SSLException
 
 /** Zustand der Preis-Aktualisierung fuer die Oberflaeche. */
 sealed interface PriceRefreshState {
@@ -113,9 +114,12 @@ class PriceRepository(
     suspend fun refreshWishlist(maxAgeMs: Long = TWELVE_HOURS): PriceRefreshState.Done =
         refreshIds(force = false) { priceDao.staleWishIds(System.currentTimeMillis() - maxAgeMs) }
 
-    /** Benutzer hat "aktualisieren" gedrueckt: im App-Bereich starten, damit es beim Verlassen weiterlaeuft. */
-    fun refreshAllInBackground(force: Boolean) {
-        scope.launch { runCatching { refreshTracked(force) } }
+    /**
+     * Im App-Bereich aktualisieren, damit es beim Verlassen des Bildschirms weiterlaeuft.
+     * @param maxAgeMs nur Preise neu laden, die aelter sind (TCGdex aktualisiert ohnehin nur einmal am Tag)
+     */
+    fun refreshAllInBackground(force: Boolean = false, maxAgeMs: Long = TWELVE_HOURS) {
+        scope.launch { runCatching { refreshTracked(force, maxAgeMs) } }
     }
 
     private suspend fun refreshIds(force: Boolean, ids: suspend () -> List<String>): PriceRefreshState.Done =
@@ -147,9 +151,7 @@ class PriceRepository(
                                         throw e
                                     } catch (e: Exception) {
                                         failed.incrementAndGet()
-                                        if (e is UnknownHostException || e is ConnectException || e is SocketTimeoutException) {
-                                            connectionErrors.incrementAndGet()
-                                        }
+                                        if (isConnectionError(e)) connectionErrors.incrementAndGet()
                                     }
                                     _state.value = PriceRefreshState.Running(done.incrementAndGet(), todo.size)
                                 }
@@ -263,8 +265,8 @@ class PriceRepository(
             val e = result.exceptionOrNull()
             when (e) {
                 is CancellationException, is NotFound, is HttpStatus -> throw e
-                // Kein Netz: nicht 3x mit Wartezeit probieren
-                is UnknownHostException, is ConnectException -> throw e
+                // Kein Netz bzw. TLS-Fehler (WLAN-Anmeldeseite, abgefangene Verbindung): nicht 3x mit Wartezeit probieren
+                is UnknownHostException, is ConnectException, is SSLException -> throw e
                 is Exception -> last = e
                 else -> throw e ?: IOException("Fehler bei $url")
             }
@@ -273,9 +275,15 @@ class PriceRepository(
     }
 
     companion object {
+        /** Verbindung kommt gar nicht zustande – nach mehreren davon wird die Aktualisierung abgebrochen */
+        internal fun isConnectionError(e: Throwable): Boolean =
+            e is UnknownHostException || e is ConnectException || e is SocketTimeoutException || e is SSLException
+
         const val API = "https://api.tcgdex.net/v2"
         const val SIX_HOURS = 6L * 3600 * 1000
         const val TWELVE_HOURS = 12L * 3600 * 1000
+        /** Knopf "Preise aktualisieren": nur Preise, die aelter als eine Stunde sind */
+        const val ONE_HOUR = 3600L * 1000
         /** Platzhalter-Variante: Karte hat bei Cardmarket (noch) keinen Preis */
         const val NO_PRICE = "#kein-preis"
     }
