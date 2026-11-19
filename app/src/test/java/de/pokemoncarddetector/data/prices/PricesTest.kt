@@ -135,6 +135,19 @@ class PricesTest {
     }
 
     @Test
+    fun doppelterSchluesselBehaeltHauptProdukt() {
+        // sv10-096: TCGdex listet zweimal "holo" – der Booster-Druck (Produkt des Kartenpreises, 0,07 €)
+        // darf nicht vom Neben-Produkt (50,06 €) ueberschrieben werden
+        val p = parse("sv10-096")
+        assertEquals(825969L, p.getValue("holo").idProduct)
+        assertEquals(0.07, p.getValue("holo").trend!!, 0.001)
+        assertEquals(1.05, p.getValue("normal").trend!!, 0.001)
+        assertEquals("holo", de.pokemoncarddetector.data.Variants.default(
+            listOf("reverse", "holo", "holo|stamp=set-logo", "normal", "holo|stamp=set-logo,staff", "holo|foil=cosmos"),
+        ))
+    }
+
+    @Test
     fun hauptVarianteNachProduktIdSonstReihenfolge() {
         // Produkt-ID des Kartenpreises entscheidet (Reverse zaehlt nicht, einfache Varianten zuerst)
         assertEquals("holo", PriceParser.primaryVariant(listOf("normal", "holo"), listOf(1L, 2L), 2L))

@@ -409,13 +409,53 @@ internal fun imageBackfillPayload(k: SetEntity, cards: List<CardEntity>, found: 
     },
 )
 
-/** Deutscher Hinweis fuer eine japanische Karte (wie tools/build_catalog.py, vereinfacht). */
+/** Japanischer Zusatz am Namensende -> deutsche Schreibweise (V-UNION vor V pruefen!), wie tools/build_catalog.py. */
+private val JA_SUFFIXES = listOf(
+    "VMAX" to " VMAX", "VSTAR" to " VSTAR", "V-UNION" to " V-UNION", "VUNION" to " V-UNION", "GX" to "-GX",
+    "EX" to "-EX", "ex" to " ex", "V" to " V", "BREAK" to " BREAK",
+)
+private val JA_REGIONS = listOf("アローラ" to "Alola-", "ガラル" to "Galar-", "ヒスイ" to "Hisui-", "パルデア" to "Paldea-")
+private val JA_FORMS = listOf(
+    "みどりのめん" to "Türkisgrüne-Maske-", "いどのめん" to "Brunnenmaske-", "かまどのめん" to "Ofenmaske-",
+    "いしずえのめん" to "Fundamentmaske-", "いちげき" to "Fokussierter-Angriff-", "れんげき" to "Fließender-Angriff-",
+    "はくば" to "Schimmelreiter-", "こくば" to "Rappenreiter-",
+)
+private val JA_DELTA = Regex("\\s*[（(]デルタ種[)）]\\s*$")
+private val JA_PAIR = Regex("\\s*[&＆]\\s*")
+private val KATAKANA_START = Regex("^[゠-ヿ]")
+
+/** Artnamen, die selbst mit "メガ" beginnen (Meganie, Yanmega): nur "メガメガ…" ist dort eine Mega-Entwicklung. */
+private val MEGA_IN_NAME = mapOf(154 to "メガメガ", 469 to "メガメガ")
+
+/** Ein Pokemon im japanischen Namen -> deutscher Name mit Mega-/Regional-/Form-Praefix (wie build_catalog.german_part). */
+private fun japaneseGermanPart(partJa: String, dex: Int, de: String): String {
+    val part = partJa.trim()
+    val megaPrefix = MEGA_IN_NAME[dex] ?: "メガ"
+    if (part.startsWith(megaPrefix) && part.length > megaPrefix.length) {
+        // "メガリザードンX" -> "Mega-Glurak X"
+        val xy = part.last().takeIf { it == 'X' || it == 'Y' }
+        return "Mega-" + de + (xy?.let { " $it" } ?: "")
+    }
+    // XY-Zeit: "MリザードンEX" -> "M-Glurak-EX"
+    if (part.length > 1 && part[0] == 'M' && KATAKANA_START.containsMatchIn(part.substring(1))) return "M-$de"
+    JA_FORMS.firstOrNull { part.contains(it.first) }?.let { return it.second + de.substringAfterLast('-') }
+    JA_REGIONS.firstOrNull { part.startsWith(it.first) && !de.startsWith(it.second) }?.let { return it.second + de }
+    return de
+}
+
+/** Deutscher Hinweis fuer eine japanische Karte, z.B. "メガカエンジシex" + [668] -> "Mega-Pyroleo ex" (wie build_catalog.german_hint). */
 internal fun japaneseGermanHint(nameJa: String, dex: List<Int>, species: Map<Int, String>): String {
-    val names = dex.mapNotNull { species[it] }
-    if (names.isEmpty()) return ""
-    val suffix = listOf("VMAX" to " VMAX", "VSTAR" to " VSTAR", "GX" to "-GX", "EX" to "-EX", "ex" to " ex", "V" to " V")
-        .firstOrNull { nameJa.endsWith(it.first) }?.second.orEmpty()
-    return names.joinToString(" & ") + suffix
+    val ids = dex.filter { it in species }
+    if (ids.isEmpty()) return ""
+    var name = nameJa.trim()
+    val delta = JA_DELTA.find(name)
+    if (delta != null) name = name.substring(0, delta.range.first)
+    val (base, suffix) = JA_SUFFIXES.firstOrNull { name.endsWith(it.first) && name.length > it.first.length }
+        ?.let { name.dropLast(it.first.length).trimEnd() to it.second } ?: (name to "")
+    val split = base.split(JA_PAIR)
+    val parts = if (split.size == ids.size) split else listOf(base) + List(ids.size - 1) { "" }
+    val hint = parts.zip(ids).joinToString(" & ") { (p, id) -> japaneseGermanPart(p, id, species.getValue(id)) } + suffix
+    return hint + if (delta != null) " δ" else ""
 }
 
 /** API-URL aus Pfadteilen. '+' wird zu %2B (TCGdex macht aus '+' sonst ein Leerzeichen: 'SM1+' -> 404). */

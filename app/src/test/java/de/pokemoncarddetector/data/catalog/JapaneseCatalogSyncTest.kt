@@ -125,6 +125,25 @@ class JapaneseCatalogSyncTest {
     private fun stored(setId: String) = storedCards.getValue(setId).associateBy { it.localId }
 
     @Test
+    fun deutscherHinweisMitMegaRegionUndForm() {
+        fun h(name: String, vararg dex: Int) = japaneseGermanHint(name, dex.toList(), species)
+        assertEquals("Mega-${species[668]} ex", h("メガカエンジシex", 668))
+        assertEquals("Mega-${species[6]} X ex", h("メガリザードンXex", 6))
+        assertEquals("M-${species[6]}-EX", h("MリザードンEX", 6))
+        // Meganie/Yanmega heissen selbst "メガ…" – nur "メガメガ…" ist eine Mega-Entwicklung
+        assertEquals(species[154], h("メガニウム", 154))
+        assertEquals("Mega-${species[154]} ex", h("メガメガニウムex", 154))
+        assertEquals(species[469], h("メガヤンマ", 469))
+        assertEquals("Hisui-${species[59]}", h("ヒスイ ウインディ", 59))
+        assertEquals("Alola-${species[26]} GX".replace(" GX", "-GX"), h("アローラライチュウGX", 26))
+        assertEquals("${species[877]} V-UNION", h("モルペコV-UNION", 877))
+        assertEquals("${species[25]} & ${species[644]}-GX", h("ピカチュウ&ゼクロムGX", 25, 644))
+        assertEquals("${species[149]} ex δ", h("カイリューex（デルタ種）", 149))
+        assertEquals("${species[6]} ex", h("リザードンex", 6))
+        assertEquals("", h("グズマ"))
+    }
+
+    @Test
     fun liveListeGegenMitgeliefertenKatalogLaedtNichts() {
         // web1 meldet 48 Karten, listet aber 47; WCS23 meldet 30, listet 1 – frueher bei jedem Abgleich neu geladen
         val web1 = known.getValue("ja:web1")

@@ -46,7 +46,8 @@ import de.pokemoncarddetector.data.SettingsRepository
 import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
 import de.pokemoncarddetector.data.prices.PriceRepository
-import de.pokemoncarddetector.data.prices.variantPrice
+import de.pokemoncarddetector.data.prices.wishPrice
+import de.pokemoncarddetector.data.prices.wishReceived
 import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.card.CardSheet
 import de.pokemoncarddetector.ui.components.CardTile
@@ -95,11 +96,11 @@ class WishlistViewModel(
         val rows = cards.map { item ->
             val v = wishVariant[item.card.id].orEmpty()
             // "Variante egal" -> guenstigster Preis der Karte
-            val p = variantPrice(byCard[item.card.id].orEmpty(), v.ifBlank { Variants.UNKNOWN }, settings.priceMetric)
+            val p = wishPrice(byCard[item.card.id].orEmpty(), v, settings.priceMetric)
             WishRow(item, v, p?.euro, exactPrice = p?.exact == true)
         }
         // "Erhalten" = gewuenschte Variante (oder bei "egal" irgendeine) ist in der Sammlung
-        fun received(r: WishRow) = if (r.wishVariant.isBlank()) r.item.owned else (r.item.quantities[r.wishVariant] ?: 0) > 0
+        fun received(r: WishRow) = wishReceived(r.item, r.wishVariant)
         val sorted = when (s) {
             WishSort.PRICE -> rows.sortedByDescending { it.price ?: -1.0 }
             WishSort.SET -> rows.sortedWith(compareByDescending<WishRow> { it.item.setRelease }.thenBy { it.item.card.sortIndex })

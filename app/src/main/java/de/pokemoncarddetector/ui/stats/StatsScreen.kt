@@ -54,11 +54,13 @@ import de.pokemoncarddetector.data.db.PriceEntity
 import de.pokemoncarddetector.data.db.SerieEntity
 import de.pokemoncarddetector.data.db.SetWithProgress
 import de.pokemoncarddetector.data.db.ValueSnapshot
+import de.pokemoncarddetector.data.db.WishEntity
 import de.pokemoncarddetector.data.prices.PriceRefreshState
 import de.pokemoncarddetector.data.prices.PriceRepository
 import de.pokemoncarddetector.data.prices.centsFor
 import de.pokemoncarddetector.data.prices.collectionValue
-import de.pokemoncarddetector.data.prices.priceFor
+import de.pokemoncarddetector.data.prices.wishPrice
+import de.pokemoncarddetector.data.prices.wishReceived
 import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.card.CardSheet
 import de.pokemoncarddetector.ui.components.CardTile
@@ -116,6 +118,7 @@ private data class Inputs(
     val series: List<SerieEntity>,
     val sets: List<SetWithProgress>,
     val wishCards: List<CardItem>,
+    val wishes: List<WishEntity>,
 )
 
 class StatsViewModel(
@@ -131,8 +134,14 @@ class StatsViewModel(
         combine(stats.observeCollectionRows(), prices.observeAllPrices(), settingsRepo.settings, stats.observeHistory()) { a, b, c, d ->
             listOf<Any>(a, b, c, d)
         },
-        combine(stats.observeOwnedMeta(), repository.observeSeries(), repository.observeSets(false), repository.observeSets(true), repository.observeWishlistCards()) { a, b, c, d, e ->
-            listOf<Any>(a, b, c + d, e)
+        combine(
+            stats.observeOwnedMeta(),
+            repository.observeSeries(),
+            combine(repository.observeSets(false), repository.observeSets(true)) { a, b -> a + b },
+            repository.observeWishlistCards(),
+            repository.observeWishes(),
+        ) { a, b, c, d, e ->
+            listOf<Any>(a, b, c, d, e)
         },
     ) { x, y ->
         @Suppress("UNCHECKED_CAST")
@@ -145,6 +154,7 @@ class StatsViewModel(
             series = y[1] as List<SerieEntity>,
             sets = y[2] as List<SetWithProgress>,
             wishCards = y[3] as List<CardItem>,
+            wishes = y[4] as List<WishEntity>,
         )
     }
 
@@ -197,9 +207,10 @@ class StatsViewModel(
             .map { (r, n) -> BarItem(r, n.toDouble(), "$n") }
 
         // Wunschliste: noch fehlende Karten
-        val missingWishes = i.wishCards.filter { !it.owned }
-        // "Variante egal": guenstigster Preis der Karte
-        val wishCost = missingWishes.sumOf { priceFor(pricesByCard[it.card.id].orEmpty(), Variants.UNKNOWN, metric) ?: 0.0 }
+        // Gleiche Regeln wie die Wunschliste: gewuenschte Variante, bei "Variante egal" irgendeine / die guenstigste
+        val wishVariant = i.wishes.associate { it.cardId to it.variant }
+        val missingWishes = i.wishCards.filter { !wishReceived(it, wishVariant[it.card.id].orEmpty()) }
+        val wishCost = missingWishes.sumOf { wishPrice(pricesByCard[it.card.id].orEmpty(), wishVariant[it.card.id].orEmpty(), metric)?.euro ?: 0.0 }
 
         StatsUiState(
             loading = false,
@@ -318,7 +329,8 @@ fun StatsScreen(onOpenSet: (String) -> Unit) {
             item {
                 Text(
                     "Preise: Cardmarket (über TCGdex, täglich aktualisiert), ${state.settings.priceMetric.label}. " +
-                        "Fehlt der Preis einer Variante, zählt der niedrigste Preis der Karte. " +
+                        "Hat eine Variante keinen eigenen Preis, zählt der Preis des gemeinsamen Cardmarket-Produkts " +
+                        "(z. B. bei der 1. Edition), sonst der niedrigste Preis der Karte. " +
                         (state.lastFetch?.let { "Ältester Preis-Stand: ${germanDateTime(it)}." } ?: "Noch keine Preise geladen.") +
                         (if (state.unfetched > 0) " ${cards(state.unfetched)} warten noch auf einen Preis." else ""),
                     style = MaterialTheme.typography.bodySmall,

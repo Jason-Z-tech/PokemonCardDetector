@@ -58,7 +58,8 @@ object PriceParser {
         val keys = details.mapIndexed { i, v -> if (canonicalKeys) variantKey(v) else catalogVariants.getOrNull(i) ?: variantKey(v) }
         val ownIds = details.map { ((it["thirdParty"] as? JsonObject)?.get("cardmarket") as? JsonPrimitive)?.longOrNull }
         val top = (json["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject
-        val primary = primaryVariant(keys, ownIds, (top?.get("idProduct") as? JsonPrimitive)?.longOrNull)
+        val topId = (top?.get("idProduct") as? JsonPrimitive)?.longOrNull
+        val primary = primaryVariant(keys, ownIds, topId)
         val base = details.indices.firstNotNullOfOrNull { i -> details[i].cardmarket()?.takeIf { keys[i] == primary } } ?: top
         val baseId = (base?.get("idProduct") as? JsonPrimitive)?.longOrNull
 
@@ -71,6 +72,10 @@ object PriceParser {
             val cm = v.cardmarket()
                 ?: base?.takeIf { (key == primary || key == "reverse") && (ownId == null || ownId == baseId) }
                 ?: return@forEachIndexed
+            // Doppelter Schluessel (z.B. sv10-096: zweimal "holo" mit verschiedenen Produkten):
+            // der erste gewinnt, ausser ein spaeterer ist das Haupt-Produkt der Karte
+            val existing = out[key]
+            if (existing != null && (existing.idProduct == topId || ownId != topId)) return@forEachIndexed
             price(cardId, key, cm, key.startsWith("reverse"), now)?.let { out[key] = it }
         }
         // Varianten, die bei Cardmarket kein eigenes Produkt haben (z.B. 1. Edition: nur ein Merkmal des Angebots),
@@ -154,6 +159,14 @@ fun variantPrice(cardPrices: List<PriceEntity>, variant: String, metric: PriceMe
     cardPrices.firstOrNull { it.variant == variant && it.shared }?.value(metric)?.let { return VariantPrice(it, exact = false) }
     return cardPrices.mapNotNull { it.value(metric) }.minOrNull()?.let { VariantPrice(it, exact = false) }
 }
+
+/** Wunsch erfuellt? "Variante egal" (leer) = irgendeine Variante in der Sammlung, sonst genau die gewuenschte. */
+fun wishReceived(item: de.pokemoncarddetector.data.db.CardItem, wishVariant: String): Boolean =
+    if (wishVariant.isBlank()) item.owned else (item.quantities[wishVariant] ?: 0) > 0
+
+/** Preis eines Wunsches: die gewuenschte Variante, bei "Variante egal" der guenstigste Preis der Karte. */
+fun wishPrice(cardPrices: List<PriceEntity>, wishVariant: String, metric: PriceMetric): VariantPrice? =
+    variantPrice(cardPrices, wishVariant.ifBlank { Variants.UNKNOWN }, metric)
 
 /** Wert einer Variante fuer Sammlungswert und Wunschliste (siehe [variantPrice]). */
 fun priceFor(cardPrices: List<PriceEntity>, variant: String, metric: PriceMetric): Double? =

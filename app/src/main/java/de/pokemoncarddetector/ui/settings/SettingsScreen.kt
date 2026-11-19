@@ -166,7 +166,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 when {
                                     ps.offline -> "Keine Internetverbindung – Preise bleiben auf dem letzten Stand"
                                     // Nichts aelter als eine Stunde: kein Abruf noetig
-                                    ps.updated == 0 && ps.failed == 0 -> "Alle Preise sind aktuell"
+                                    ps.updated == 0 && ps.failed == 0 && lastFetch != null -> "Alle Preise sind aktuell"
+                                    // Leere Sammlung + Wunschliste: es gibt nichts zu laden
+                                    ps.updated == 0 && ps.failed == 0 -> "Keine Karten in Sammlung oder Wunschliste"
                                     else -> (if (ps.updated == 1) "1 Karte aktualisiert" else "${ps.updated} Karten aktualisiert") +
                                         if (ps.failed > 0) ", ${ps.failed} fehlgeschlagen" else ""
                                 },
