@@ -353,15 +353,63 @@ class RecognitionRegressionTest {
             listOf("BASIS Woobat KP 60" to 48, "7/12" to 12, "©2012 Pokémon" to 10) to "2012bw-7",
             // pop5-13 "Pikachu δ" hat dieselbe Nummer und Gesamtzahl: er darf das einfache Pikachu nicht verdraengen
             listOf("BASIS Pikachu KP 50" to 48, "13/17" to 12, "©2006 Pokémon" to 10) to "pop4-13",
+            // Stufe mit einem Lesefehler (echte OCR liest "Basıs)", "„Basıs,/", "BASIE"): weiter BASIS + Pikachu
+            listOf("Basıs) Pikachu KP 50" to 48, "13/17" to 12, "©2006 Pokémon" to 10) to "pop4-13",
+            listOf("BASlS Pikachu KP 50" to 48, "13/17" to 12, "©2006 Pokémon" to 10) to "pop4-13",
+            listOf("BASlS Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("8ASIS Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("BAS1S Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("„Basıs,/ Pikachu KP 60" to 48, "065/202" to 12, "©2020 Pokémon" to 10) to "swsh1-65",
+            listOf("Basıs) Pikachu" to 48, "KP 60" to 14, "025/165" to 12, "©2023 Pokémon" to 10) to "sv03.5-025",
+            listOf("Basıs) Pikachu KP 60" to 48, "SM04" to 12, "©2017 Pokémon" to 10) to "smp-SM04",
+            listOf("BASlS Woobat KP 60" to 48, "7/12" to 12, "©2012 Pokémon" to 10) to "2012bw-7",
         )
         for ((l, id) in cases) {
             val r = matcher.match(lines(*l.toTypedArray()))
             assertEquals(r.show(), id, r.best?.card?.id)
             assertTrue(r.show(), r.confident)
         }
-        // Gegenprobe: ein laengerer Name direkt hinter der Stufe widerspricht weiter ("Mewtu" ist nicht Mew-ex)
-        val m = matcher.match(lines("BASIS Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
-        assertFalse(m.show(), m.confident)
+        // Gegenprobe: ein laengerer Name direkt hinter der Stufe widerspricht weiter ("Mewtu" ist nicht Mew-ex),
+        // auch hinter einer Stufe mit Lesefehler
+        for (name in listOf("BASIS Mewtu KP 130", "BASlS Mewtu KP 130")) {
+            val m = matcher.match(lines(name to 48, "151/165" to 12, "©2023 Pokémon" to 10))
+            assertFalse(m.show(), m.confident)
+        }
+        // ... und ein Name, der direkt hinter der Stufe beginnt, gehoert nicht zu ihr ("basisp" ist keine Stufe mit
+        // Lesefehler): "Pikachu δ" (pop5-13) ist nicht das einfache Pikachu mit derselben Nummer (pop4-13)
+        for (stage in listOf("BASIS", "BASlS")) {
+            val d = matcher.match(lines("$stage Pikachu δ" to 48, "13/17" to 12, "©2007 Pokémon" to 10))
+            assertEquals(d.show(), "pop5-13", d.best?.card?.id)
+            assertTrue(d.show(), d.confident)
+        }
+    }
+
+    @Test
+    fun widersprochenerNameMachtAehnlicheNamenNichtZumTreffer() {
+        // "Icognito ! LV.35" mit "!" als "I"/"l" gelesen ("?" als "P"): "Icognito I" ist der Name einer anderen Karte
+        // und widerspricht Icognito ! (dp6-42) zu Recht. Ein beliebiges anderes Icognito aus demselben Set
+        // ("Icognito W", eine Stelle anders) passt deshalb aber nicht besser zur Zeile: weder bester Treffer noch
+        // Live-Vorschlag
+        val sameRow = listOf(
+            OcrLine("Icognito I", 20, 0, 260, 48), OcrLine("LV.35", 320, 4, 420, 44), OcrLine("KP 50", 480, 4, 580, 44),
+            OcrLine("42/146", 20, 78, 62, 92), OcrLine("©2008 Pokémon", 20, 122, 85, 132),
+        )
+        val cases = listOf(
+            lines("Icognito I LV.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            lines("Icognito l LV.35 KP 50" to 48, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            lines("Icognito P LV.35 KP 70" to 48, "82/146" to 12, "©2008 Pokémon" to 10) to "dp6-82",
+            lines("Icognito I LV.35" to 48, "KP 50" to 14, "42/146" to 12, "©2008 Pokémon" to 10) to "dp6-42",
+            sameRow to "dp6-42",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(l)
+            assertEquals(r.show(), id, r.best?.card?.id)
+            val live = r.best?.takeIf { !r.confident && it.nameScore >= 0.85 }
+            assertTrue(r.show(), live == null || live.card.id == id)
+        }
+        // Gegenprobe: ein exakt gelesener anderer Name zaehlt weiter ("Mewtu" mit der Nummer von Mew-ex)
+        val m = matcher.match(lines("Mewtu KP 130" to 48, "151/165" to 12, "©2023 Pokémon" to 10))
+        assertEquals(m.show(), "Mewtu", m.best?.card?.name)
     }
 
     @Test

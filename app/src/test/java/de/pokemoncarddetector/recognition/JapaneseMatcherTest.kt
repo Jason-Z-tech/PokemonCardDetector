@@ -418,4 +418,62 @@ class JapaneseMatcherTest {
         assertFalse(m.show(), m.best?.card?.name == "ミュウ")
         assertEquals(m.show(), null, m.liveSuggestion()?.takeIf { it.card.name == "ミュウ" })
     }
+
+    @Test
+    fun kuerzelMitEinemLesefehlerVerdraengtGelesenenNamenNicht() {
+        // Mehrere Sets haben dieselbe Gesamtzahl wie ein Set ohne Kartenliste, dessen Kuerzel nur ein Zeichen anders
+        // ist (S8/S3, S9/S4, S10a/S10b, S10P/S10D, S7D/S7R, SV4a/S4a). Ein falsch gelesenes Zeichen im Kuerzel macht
+        // den Platzhalter nicht zum besten Treffer: Name, Nummer und Gesamtzahl passen, die Karte bleibt sicher
+        for ((l, id) in listOf(
+            listOf("ドロンチ" to 48, "S3 E 050/100" to 12) to "ja:S8-050",
+            listOf("ドロンチ HP90" to 48, "S3 E 050/100" to 12) to "ja:S8-050",
+            listOf("タマタマ" to 48, "S4 F 001/100" to 12) to "ja:S9-001",
+            listOf("ヒスイ ゾロアーク" to 48, "S10b F 030/071" to 12) to "ja:S10a-030",
+            listOf("エムリット" to 48, "S10D F 030/067" to 12) to "ja:S10P-030",
+            listOf("スイクンV" to 48, "S7R E 001/067" to 12) to "ja:S7D-001",
+            listOf("シャリタツ" to 48, "S4a G 050/190" to 12) to "ja:SV4a-050",
+            listOf("ピカチュウ HP70" to 48, "S4a G 055/190" to 12) to "ja:SV4a-055",
+            listOf("リザードンex HP330" to 48, "S4a G 115/190" to 12) to "ja:SV4a-115",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: das Kuerzel S1a ist zwei Zeichen von S6H entfernt und widerspricht dem einfachen Liberlo weiter
+        // (siehe gelesenesKuerzelDesPlatzhaltersWidersprichtAnderemSet), auch gross geschrieben
+        val s1a = matcher.match(lines("エースバーン" to 48, "S1A 017/070" to 12))
+        assertEquals(s1a.show(), "ja:S1a-017", s1a.best?.card?.id)
+        assertFalse(s1a.show(), s1a.confident)
+    }
+
+    @Test
+    fun einzelneFalschGeleseneKpZifferBleibtSicher() {
+        // Viele Karten teilen Nummer und Gesamtzahl mit einem Platzhalter (SV4a/S4a, S9/S4, S6H/S1a). Eine falsch
+        // gelesene Ziffer der KP ("HP80" statt 90, "HP180" statt 130) ist der typische OCR-Fehler und kein Hinweis auf
+        // die Logo-Form des Platzhalters: die Karte bleibt sicher
+        for ((l, id) in listOf(
+            listOf("リザード HP80" to 48, "026/190" to 12) to "ja:SV4a-026",
+            listOf("リザード" to 48, "HP80" to 20, "026/190" to 12) to "ja:SV4a-026",
+            listOf("ミュウex HP160" to 48, "076/190" to 12) to "ja:SV4a-076",
+            listOf("ラプラス HP180" to 48, "022/100" to 12) to "ja:S9-022",
+            listOf("ラプラス" to 48, "HP180" to 20, "022/100" to 12) to "ja:S9-022",
+            listOf("キノガッサ HP170" to 48, "004/100" to 12) to "ja:S9-004",
+            listOf("エースバーン HP120" to 48, "017/070" to 12) to "ja:S6H-017",
+            listOf("エースバーン" to 48, "HP180" to 20, "017/070" to 12) to "ja:S6H-017",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: KP der Logo-Form (S1a Liberlo-VMAX KP 320 statt Liberlo KP 170), oder nur eine Ziffer anders,
+        // aber 100 KP mehr: nicht sicher, der Platzhalter bleibt in der Auswahl
+        for (l in listOf(
+            listOf("エースバーン HP320" to 48, "017/070" to 12),
+            listOf("エースバーン" to 48, "HP270" to 20, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident)
+            assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == "ja:S1a-017" })
+        }
+    }
 }

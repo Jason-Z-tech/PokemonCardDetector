@@ -176,7 +176,7 @@ class CardMatcher(private val index: CatalogIndex) {
          * Entwicklungsstufe, die links vom Namen in derselben Zeile steht (SM- bis ME-Layout): "BASIS Pikachu",
          * "PHASE1} Arbok", "BASIC ...", "STAGE 1 ...". Siehe [inStageLabel].
          */
-        val STAGE_LABEL = Regex("basis|basic|phase|stage")
+        val STAGE_WORDS = listOf("basis", "basic", "phase", "stage")
     }
 
     fun match(lines: List<OcrLine>): MatchResult = match(CardTextParser.parse(lines))
@@ -220,11 +220,17 @@ class CardMatcher(private val index: CatalogIndex) {
         // Ein gelesenes Kuerzel eines anderen Sets widerspricht dem Platzhalter, dann gilt das nicht. Passt das
         // gelesene Kuerzel dagegen zum Platzhalter, widerspricht es jeder Karte aus einem anderen Set, auch mit
         // exakt gelesenem Namen ("エースバーン" + "S1a 017/070" ist Liberlo-VMAX mit ungelesenem Logo, nicht S6H-017).
+        // Ausser das Kuerzel der Karte ist nur ein Zeichen anders: dann ist eher das Kuerzel falsch gelesen
+        // ("S3" statt "S8", "S4a" statt "SV4a"), als dass der Platzhalter zufaellig dasselbe Pokemon mit Logo ist.
         val placeholderScore = candidates.values
             .filter { it.numberMatched && it.totalMatched && it.card.isPlaceholder && (codeSetIds.isEmpty() || it.codeMatched) }
             .maxOfOrNull { it.score }
+        fun codeMisread(c: MatchCandidate): Boolean {
+            val own = c.set.abbreviation.uppercase().substringBefore(':')
+            return own.isNotBlank() && knownCodes.any { TextNorm.levenshtein(it, own) <= 1 }
+        }
         fun belowPlaceholder(c: MatchCandidate) = placeholderScore != null && (
-            (codeSetIds.isNotEmpty() && !c.codeMatched) ||
+            (codeSetIds.isNotEmpty() && !c.codeMatched && !codeMisread(c)) ||
                 (!c.numberMatched && !closeNumber(c.card) && !readExactly(parsed, c.card))
             )
 
@@ -236,14 +242,21 @@ class CardMatcher(private val index: CatalogIndex) {
         val fallbackSets = (setsFromTotals + codeSetIds + setsFromCandidates).toSet()
         val bestNumberCandidate = candidates.values.maxByOrNull { it.nameScore }
         val bestNumberName = bestNumberCandidate?.nameScore ?: 0.0
+        // Aehnlichkeit der Nummern-Treffer ohne Widerspruch: "Icognito I LV.35" (OCR fuer "Icognito ! LV.35")
+        // widerspricht Icognito ! (dp6-42), weil "Icognito I" ein anderer Kartenname ist. Ein Icognito mit anderem
+        // Buchstaben aus demselben Set passt deshalb aber nicht besser zur Zeile
+        val bestNumberRaw = candidates.values.maxOfOrNull { nameScore(parsed, it.card, null) } ?: 0.0
         if (fallbackSets.isNotEmpty()) {
             for (setId in fallbackSets) {
                 val set = index.setsById[setId] ?: continue
                 for (card in index.cardsBySet[setId].orEmpty()) {
                     if (card.id in candidates) continue
                     val ns = nameScore(parsed, card, contained)
-                    // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch gelesen)
+                    // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch
+                    // gelesen). Ist der Nummern-Treffer widersprochen, zaehlt dafuer sein Wert ohne Widerspruch,
+                    // ausser der Name ist exakt gelesen ("Mewtu KP 130" mit der Nummer von Mew-ex)
                     if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
+                    if (ns < 0.95 && ns <= bestNumberRaw + 0.02) continue
                     // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
                     if (bestNumberCandidate != null && bestNumberName >= 0.8 && logoUnread(card, bestNumberCandidate.card, parsed)) continue
                     val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) } ||
@@ -291,8 +304,13 @@ class CardMatcher(private val index: CatalogIndex) {
         val second = sorted.getOrNull(1)
         // Gelesene KP oder ein Logo in eigener Zeile passen nicht zur Karte, ein Platzhalter mit derselben Nummer schon
         // (Name unbekannt): dann ist die Karte vermutlich die des Platzhalters und ihr Logo nicht oder in eigener Zeile
-        // gelesen ("エースバーン" + "VMAX")
-        val hpContradicts = parsed.hp != null && best.card.hp > 0 && parsed.hp != best.card.hp
+        // gelesen ("エースバーン" + "VMAX", "エースバーン" + "HP320" statt KP 170).
+        // Eine falsch gelesene Ziffer ("HP80" statt 90, "HP180" statt 130) ist dagegen der typische OCR-Fehler, wie bei
+        // der Nummer. Nur nicht, wenn die KP dadurch um 100 oder mehr steigen: das liegt bei typischen Verwechslungen
+        // (1/7, 2/7, 3/8) ueber 400 KP, eher ist es die Logo-Form ("HP220" fuer die V-Karte statt KP 120)
+        val hpContradicts = parsed.hp != null && best.card.hp > 0 && (
+            TextNorm.levenshtein(parsed.hp.toString(), best.card.hp.toString()) > 1 || parsed.hp >= best.card.hp + 100
+            )
         val logoContradicts = parsed.nameLines.any { line ->
             line in IndexCard.LOGOS_NORM && !best.card.nameNorm.endsWith(line) && !best.card.nameEnNorm.endsWith(line)
         }
@@ -309,15 +327,21 @@ class CardMatcher(private val index: CatalogIndex) {
         return set.officialCount == 0 && set.totalCount == total
     }
 
-    private fun nameScore(parsed: ParsedCardText, card: IndexCard, contained: ContainedNames): Double {
+    /**
+     * Wie gut eine Namenszeile zum Namen von [card] passt. Ohne [contained] die reine Aehnlichkeit, ohne den
+     * Widerspruch durch einen laengeren Namen in der Zeile ([similarity]).
+     */
+    private fun nameScore(parsed: ParsedCardText, card: IndexCard, contained: ContainedNames?): Double {
         var best = 0.0
         val own = listOf(card.nameNorm, card.nameEnNorm, card.aliasNameNorm).filter { it.isNotEmpty() }
+        fun sim(line: String, name: String) =
+            if (contained == null) TextNorm.nameSimilarity(line, name) else similarity(line, name, own, contained)
         for (line in parsed.nameLines) {
-            var s = similarity(line, card.nameNorm, own, contained)
-            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, similarity(line, card.nameEnNorm, own, contained))
-            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * similarity(line, card.baseNorm, own, contained))
-            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * similarity(line, card.baseEnNorm, own, contained))
-            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, similarity(line, card.aliasNameNorm, own, contained))
+            var s = sim(line, card.nameNorm)
+            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, sim(line, card.nameEnNorm))
+            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * sim(line, card.baseNorm))
+            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * sim(line, card.baseEnNorm))
+            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, sim(line, card.aliasNameNorm))
             if (s > best) best = s
             if (best >= 1.0) break
         }
@@ -426,13 +450,25 @@ class CardMatcher(private val index: CatalogIndex) {
             }
 
     /**
-     * Jedes Vorkommen von [other] in [core] beginnt mitten in einer Stufen-Angabe ([STAGE_LABEL]): "spikachu"
-     * (S Pikachu) in "basispikachu" ist BASIS + Pikachu, "swoobat" in "basiswoobat" BASIS + Woobat. Ein Name, der
-     * mit der Stufe beginnt ("Basis-Feuerenergie"), zaehlt weiter.
+     * Jedes Vorkommen von [other] in [core] beginnt mitten in einer Stufen-Angabe ([STAGE_WORDS]): "spikachu"
+     * (S Pikachu) in "basispikachu" ist BASIS + Pikachu, "swoobat" in "basiswoobat" BASIS + Woobat. Wie jedes Wort
+     * kann die Stufe einen Lesefehler haben ("BASlS", "Basıs)", "8ASIS"). Ein Name, der mit der Stufe beginnt
+     * ("Basis-Feuerenergie"), zaehlt weiter.
      */
     private fun inStageLabel(core: String, other: String): Boolean {
-        val labels = STAGE_LABEL.findAll(core).map { it.range }.toList()
-        return labels.isNotEmpty() && occurrences(core, other).all { i -> labels.any { i > it.first && i <= it.last } }
+        // Ein Stufenwort mit hoechstens einem Lesefehler beginnt vor [i] und endet hinter [i]. Der Teil ab [i] ist das
+        // Ende des Stufenworts ("s" von "spikachu" in "baslspikachu"), nicht der Anfang des naechsten Namens
+        // ("basismewtu" ist BASIS + Mewtu, nicht "basism" mit Lesefehler)
+        fun insideStage(i: Int) = STAGE_WORDS.any { w ->
+            (w.length - 1..w.length + 1).any { len ->
+                (maxOf(0, i - len + 1)..minOf(i - 1, core.length - len)).any { start ->
+                    val end = start + len
+                    w.endsWith(core.substring(i, end)) && TextNorm.levenshtein(core.substring(start, end), w) <= 1
+                }
+            }
+        }
+        val starts = occurrences(core, other).toList()
+        return starts.isNotEmpty() && starts.all(::insideStage)
     }
 
     /**
