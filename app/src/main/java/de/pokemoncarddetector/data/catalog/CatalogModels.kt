@@ -16,6 +16,8 @@ import kotlinx.serialization.json.jsonPrimitive
 data class CatalogFile(
     val version: String,
     val series: List<CatalogSerie>,
+    /** Varianten-Woerterbuch, Karten verweisen per Index darauf */
+    val variants: List<String> = emptyList(),
     val sets: List<CatalogSet>,
 )
 
@@ -37,7 +39,7 @@ data class CatalogSet(
     val symbol: String = "",
     /** Ordner der Kartenbilder (Unter-Sets: Haupt-Set), leer = eigene id */
     val img: String = "",
-    /** [localId, nameDe, nameEn, flags] */
+    /** [localId, nameDe, nameEn, flags, [Varianten-Indizes], KP, Regelzeichen] */
     val cards: List<JsonArray> = emptyList(),
 )
 
@@ -45,15 +47,29 @@ data class CatalogSet(
 data class SetPayload(val meta: CatalogSet, val cards: List<CatalogCard>)
 
 /** Karte, wie sie Import und Online-Abgleich liefern. */
-data class CatalogCard(val localId: String, val name: String, val nameEn: String, val flags: Int)
+data class CatalogCard(
+    val localId: String,
+    val name: String,
+    val nameEn: String,
+    val flags: Int,
+    val variants: List<String> = emptyList(),
+    val hp: Int = 0,
+    val regulationMark: String = "",
+)
 
-fun CatalogSet.parsedCards(): List<CatalogCard> = cards.mapNotNull { row ->
+fun CatalogSet.parsedCards(variantDictionary: List<String> = emptyList()): List<CatalogCard> = cards.mapNotNull { row ->
     if (row.size < 4) return@mapNotNull null
+    val variants = (row.getOrNull(4) as? JsonArray)
+        ?.mapNotNull { it.jsonPrimitive.intOrNull?.let(variantDictionary::getOrNull) }
+        .orEmpty()
     CatalogCard(
         localId = row[0].jsonPrimitive.content,
         name = row[1].jsonPrimitive.content,
         nameEn = row[2].jsonPrimitive.content,
         flags = row[3].jsonPrimitive.intOrNull ?: row[3].jsonPrimitive.int,
+        variants = variants,
+        hp = row.getOrNull(5)?.jsonPrimitive?.intOrNull ?: 0,
+        regulationMark = row.getOrNull(6)?.jsonPrimitive?.content.orEmpty(),
     )
 }
 
@@ -84,6 +100,9 @@ fun CatalogCard.toEntity(setId: String, sortIndex: Int) = CardEntity(
     sortIndex = sortIndex,
     searchKey = buildSearchKey(name, nameEn),
     numberKey = CardTextParser.normalizeLocalId(localId),
+    variants = variants.joinToString(";"),
+    hp = hp,
+    regulationMark = regulationMark,
 )
 
 /** Unter-Sets (Trainer-Galerie, Galar-Galerie, Glitzer-Tresor) haben ihre Bilder im Ordner des Haupt-Sets. */

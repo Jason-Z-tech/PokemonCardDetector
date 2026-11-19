@@ -106,8 +106,8 @@ class SetDetailViewModel(
     fun toggleImages() = viewModelScope.launch { settingsRepo.setShowImages(!state.value.settings.showImages) }
 
     /** Langes Druecken auf eine fehlende Karte: direkt als "habe ich" (1x) markieren. */
-    fun markOwned(item: CardItem) = viewModelScope.launch { repository.setQuantity(item.card.id, 1) }
-    fun setQuantity(cardId: String, quantity: Int) = viewModelScope.launch { repository.setQuantity(cardId, quantity) }
+    fun markOwned(item: CardItem) = viewModelScope.launch { repository.setQuantity(item.card.id, item.defaultVariant, 1) }
+    fun unmark(item: CardItem) = viewModelScope.launch { repository.removeCard(item.card.id) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -207,7 +207,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                                 vm.markOwned(item)
                                 scope.launch {
                                     val r = snackbar.showSnackbar("${item.card.name} hinzugefügt", actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
-                                    if (r == SnackbarResult.ActionPerformed) vm.setQuantity(item.card.id, 0)
+                                    if (r == SnackbarResult.ActionPerformed) vm.unmark(item)
                                 }
                             }
                         },

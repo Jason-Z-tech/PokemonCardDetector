@@ -58,8 +58,19 @@ class CardRepository(private val db: AppDatabase) {
     suspend fun cardsByIds(ids: List<String>): List<CardItem> =
         if (ids.isEmpty()) emptyList() else catalog.cardsByIds(ids)
 
-    suspend fun setQuantity(cardId: String, quantity: Int): Int = collection.setQuantity(cardId, quantity)
-    suspend fun add(cardId: String, delta: Int = 1): Int = collection.add(cardId, delta)
+    /** Anzahl einer Variante setzen. */
+    suspend fun setQuantity(cardId: String, variant: String, quantity: Int): Int = collection.setQuantity(cardId, variant, quantity)
+
+    /** Eine Variante +/-. Gibt die neue Anzahl dieser Variante zurueck. */
+    suspend fun add(cardId: String, variant: String, delta: Int = 1): Int = collection.add(cardId, variant, delta)
+
+    /** Karte komplett entfernen (alle Varianten). */
+    suspend fun removeCard(cardId: String) = collection.deleteCard(cardId)
+
+    /** Aktueller Stand einer Karte (alle Varianten) – fuer "Rueckgaengig". */
+    suspend fun snapshot(cardId: String): List<CollectionEntity> = collection.entriesOf(cardId)
+
+    suspend fun restore(cardId: String, entries: List<CollectionEntity>) = collection.restore(cardId, entries)
 
     // ---------- Index fuer die Erkennung ----------
 
@@ -79,7 +90,7 @@ class CardRepository(private val db: AppDatabase) {
                     totalCount = it.totalCount,
                 )
             }
-            val cards = catalog.indexRows().map { IndexCard(it.id, it.setId, it.localId, it.name, it.nameEn) }
+            val cards = catalog.indexRows().map { IndexCard(it.id, it.setId, it.localId, it.name, it.nameEn, it.hp) }
             CatalogIndex(sets, cards)
         }.also { cachedIndex = it }
     }
@@ -92,15 +103,15 @@ class CardRepository(private val db: AppDatabase) {
     // ---------- Sicherung ----------
 
     @Serializable
-    data class Backup(val app: String = "PokemonCardDetector", val version: Int = 1, val cards: List<Entry>) {
+    data class Backup(val app: String = "PokemonCardDetector", val version: Int = 2, val cards: List<Entry>) {
         @Serializable
-        data class Entry(val id: String, val quantity: Int, val updatedAt: Long = 0)
+        data class Entry(val id: String, val quantity: Int, val updatedAt: Long = 0, val variant: String = "")
     }
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
     suspend fun exportJson(): String = withContext(Dispatchers.IO) {
-        val entries = collection.all().map { Backup.Entry(it.cardId, it.quantity, it.updatedAt) }
+        val entries = collection.all().map { Backup.Entry(it.cardId, it.quantity, it.updatedAt, it.variant) }
         json.encodeToString(Backup.serializer(), Backup(cards = entries))
     }
 
@@ -109,7 +120,7 @@ class CardRepository(private val db: AppDatabase) {
         val backup = json.decodeFromString(Backup.serializer(), text)
         val now = System.currentTimeMillis()
         val entries = backup.cards.filter { it.quantity > 0 && it.id.isNotBlank() }
-            .map { CollectionEntity(it.id, it.quantity.coerceAtMost(999), if (it.updatedAt > 0) it.updatedAt else now) }
+            .map { CollectionEntity(it.id, it.variant, it.quantity.coerceAtMost(999), if (it.updatedAt > 0) it.updatedAt else now) }
         db.withTransaction {
             if (replace) collection.clear()
             collection.upsertAll(entries)

@@ -1,5 +1,6 @@
 package de.pokemoncarddetector.data.catalog
 
+import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.AppDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -17,8 +18,12 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -79,7 +84,9 @@ class CatalogSync(
                             // damit keine deutschen Namen durch englische ersetzt oder Karten geloescht werden.
                             val de = if (id in totalsDe) getObjectWithRetry("de/sets/$id") else null
                             val en = if (id in totalsEn) getObjectWithRetry("en/sets/$id") else null
-                            buildPayload(id, de, en, existing = dao.cardsOfSet(id).associateBy { it.localId })
+                            // Varianten (Normal/Holo/Reverse/...): wenn das fehlschlaegt, bleiben die bisherigen erhalten
+                            val variants = runCatching { fetchVariants(id) }.getOrNull()
+                            buildPayload(id, de, en, existing = dao.cardsOfSet(id).associateBy { it.localId }, variants = variants)
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -101,7 +108,12 @@ class CatalogSync(
             val stored = dao.cardsOfSet(p.meta.id).associateBy { it.localId }
             k.name != p.meta.name || k.cardCount != p.cards.size || k.officialCount != p.meta.official ||
                 k.releaseDate != p.meta.release || k.logoUrl != p.meta.logo ||
-                p.cards.any { c -> stored[c.localId]?.let { it.name != c.name || it.nameEn != c.nameEn || it.imageFlags != c.flags } ?: true }
+                p.cards.any { c ->
+                    stored[c.localId]?.let {
+                        it.name != c.name || it.nameEn != c.nameEn || it.imageFlags != c.flags ||
+                            it.variants != c.variants.joinToString(";") || it.hp != c.hp
+                    } ?: true
+                }
         }
 
         val seriesNamesEn = seriesEn.associate { it.jsonObject.str("id").orEmpty() to it.jsonObject.str("name").orEmpty() }
@@ -130,6 +142,7 @@ class CatalogSync(
         de: JsonObject?,
         en: JsonObject?,
         existing: Map<String, de.pokemoncarddetector.data.db.CardEntity>,
+        variants: Map<String, VariantInfo>?,
     ): SetPayload? {
         val base = de ?: en ?: return null
         val serie = base["serie"]?.jsonObjectOrNull()?.str("id") ?: "misc"
@@ -160,7 +173,17 @@ class CatalogSync(
                 // Unter-Sets: API liefert kein Bild-Feld, Bilder liegen im Haupt-Set-Ordner
                 img = existing[lid]?.imageFlags?.and(3)?.takeIf { it != 0 } ?: 3
             }
-            CatalogCard(lid, a.de ?: a.en ?: "", a.en ?: a.de ?: "", img or (if (a.de != null) 4 else 0))
+            val old = existing[lid]
+            val v = variants?.get(lid)
+            CatalogCard(
+                localId = lid,
+                name = a.de ?: a.en ?: "",
+                nameEn = a.en ?: a.de ?: "",
+                flags = img or (if (a.de != null) 4 else 0),
+                variants = v?.keys?.takeIf { it.isNotEmpty() } ?: old?.variants?.let { Variants.list(it) }.orEmpty(),
+                hp = v?.hp ?: old?.hp ?: 0,
+                regulationMark = v?.regulationMark ?: old?.regulationMark.orEmpty(),
+            )
         }
         val meta = CatalogSet(
             id = id,
@@ -186,6 +209,71 @@ class CatalogSync(
             val body = resp.body?.string() ?: throw IOException("Leere Antwort bei $path")
             return json.parseToJsonElement(body)
         }
+    }
+
+    data class VariantInfo(val hp: Int, val regulationMark: String, val keys: List<String>)
+
+    /** Varianten aller Karten eines Sets ueber die GraphQL-Schnittstelle (je 100 Karten pro Seite). */
+    private suspend fun fetchVariants(setId: String): Map<String, VariantInfo> {
+        val out = HashMap<String, VariantInfo>()
+        var page = 1
+        while (true) {
+            val query = "{ cards(filters: {id: \"$setId-\"}, pagination: {page: $page, count: 100}) " +
+                "{ id hp regulationMark variants_detailed { type subtype foil stamp size } } }"
+            val body = buildJsonObject { put("query", query) }.toString()
+            val json = postWithRetry("$API/graphql", body)
+            val cards = (json["data"] as? JsonObject)?.get("cards") as? JsonArray ?: break
+            for (el in cards) {
+                val c = el.jsonObject
+                val id = c.str("id") ?: continue
+                if (!id.startsWith("$setId-")) continue
+                val keys = (c["variants_detailed"] as? JsonArray).orEmpty().mapNotNull { v ->
+                    val o = v as? JsonObject ?: return@mapNotNull null
+                    variantKey(o)
+                }.distinct()
+                out[id.removePrefix("$setId-")] = VariantInfo(
+                    hp = (c["hp"] as? kotlinx.serialization.json.JsonPrimitive)?.intOrNull ?: 0,
+                    regulationMark = c.str("regulationMark").orEmpty(),
+                    keys = keys,
+                )
+            }
+            if (cards.size < 100) break
+            page++
+        }
+        return out
+    }
+
+    /** Gleicher Schluessel wie tools/build_catalog.py: "reverse|foil=pokeball" */
+    private fun variantKey(v: JsonObject): String = buildList {
+        add(v.str("type") ?: "normal")
+        v.str("subtype")?.let { add("sub=$it") }
+        v.str("foil")?.let { add("foil=$it") }
+        (v["stamp"] as? JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+            ?.takeIf { it.isNotEmpty() }?.let { add("stamp=" + it.joinToString(",")) }
+        v.str("size")?.takeIf { it != "standard" }?.let { add("size=$it") }
+    }.joinToString("|")
+
+    private suspend fun postWithRetry(url: String, body: String): JsonObject {
+        var last: Exception? = null
+        repeat(4) { attempt ->
+            try {
+                val req = Request.Builder().url(url)
+                    .post(body.toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) return json.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
+                    if (resp.code != 429 && resp.code < 500) throw HttpException(resp.code, url)
+                    last = HttpException(resp.code, url)
+                }
+            } catch (e: HttpException) {
+                if (e.code != 429 && e.code < 500) throw e
+                last = e
+            } catch (e: IOException) {
+                last = e
+            }
+            kotlinx.coroutines.delay(1000L * (attempt + 1) * (attempt + 1))
+        }
+        throw last ?: IOException("Fehler bei $url")
     }
 
     /** Wiederholt bei Netzwerkfehlern, 429 und 5xx mit wachsender Wartezeit. */

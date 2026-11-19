@@ -42,7 +42,7 @@ class CatalogStore(private val context: Context, private val db: AppDatabase) {
     /** Importiert die mitgelieferte Datei. */
     suspend fun importBundled(onProgress: (Float) -> Unit = {}): String {
         val file = readBundled()
-        write(file.series, file.sets.map { SetPayload(it, it.parsedCards()) }, removeMissing = false, onProgress)
+        write(file.series, file.sets.map { SetPayload(it, it.parsedCards(file.variants)) }, removeMissing = false, onProgress)
         return file.version
     }
 

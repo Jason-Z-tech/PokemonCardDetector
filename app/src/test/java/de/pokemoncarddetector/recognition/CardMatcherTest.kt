@@ -31,7 +31,7 @@ class CardMatcherTest {
                 IndexSet(it.id, it.name, it.nameEn, it.release.take(4).toIntOrNull(), it.abbr, it.official, it.total)
             }
             val cards = catalog.sets.flatMap { s ->
-                s.parsedCards().map { c -> IndexCard("${s.id}-${c.localId}", s.id, c.localId, c.name, c.nameEn) }
+                s.parsedCards(catalog.variants).map { c -> IndexCard("${s.id}-${c.localId}", s.id, c.localId, c.name, c.nameEn, c.hp) }
             }
             index = CatalogIndex(sets, cards)
             matcher = CardMatcher(index)
@@ -157,6 +157,17 @@ class CardMatcherTest {
         assertNotNull(r.best)
         assertTrue(r.best!!.card.name.contains("Pikachu") || r.best!!.card.nameEn.contains("Pikachu"))
         assertFalse("Ohne Nummer darf das Ergebnis nicht als sicher gelten", r.confident)
+    }
+
+    @Test
+    fun kpHelfenBeiGleichemNamen() {
+        // Gleicher Name in vielen Sets: mit KP wird der passende Druck bevorzugt
+        val c = card("swsh4-25")
+        val r = matcher.match(lines("${c.name} KP ${c.hp}" to 48, "Lodernder Sturm" to 20))
+        assertNotNull(r.best)
+        assertEquals(c.hp, r.best!!.card.hp)
+        val p = CardTextParser.parse(listOf(OcrLine("Glurak 170 KP")))
+        assertEquals(170, p.hp)
     }
 
     @Test

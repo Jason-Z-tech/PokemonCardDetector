@@ -7,8 +7,16 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 private const val CARD_ITEM_COLUMNS = """
-    c.*, COALESCE(col.quantity, 0) AS quantity, s.name AS setName, s.nameEn AS setNameEn,
+    c.*, COALESCE(col.quantity, 0) AS quantity, col.variantQuantities AS variantQuantities,
+    s.name AS setName, s.nameEn AS setNameEn,
     s.serieId AS serieId, s.officialCount AS setOfficial, s.releaseDate AS setRelease, s.imageSetId AS imageSetId
+"""
+
+/** Sammlung je Karte zusammengefasst: Gesamtanzahl + "variante=anzahl;..." */
+private const val COLLECTION_PER_CARD = """
+    (SELECT cardId, SUM(quantity) AS quantity, MAX(updatedAt) AS updatedAt,
+            GROUP_CONCAT(variant || '=' || quantity, ';') AS variantQuantities
+     FROM collection WHERE quantity > 0 GROUP BY cardId)
 """
 
 @Dao
@@ -53,7 +61,7 @@ interface CatalogDao {
         SELECT s.*, COALESCE(o.owned, 0) AS owned, COALESCE(o.copies, 0) AS copies
         FROM sets s
         LEFT JOIN (
-            SELECT k.setId AS setId, COUNT(*) AS owned, SUM(col.quantity) AS copies
+            SELECT k.setId AS setId, COUNT(DISTINCT col.cardId) AS owned, SUM(col.quantity) AS copies
             FROM collection col JOIN cards k ON k.id = col.cardId
             WHERE col.quantity > 0
             GROUP BY k.setId
@@ -71,7 +79,7 @@ interface CatalogDao {
         """
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
-        LEFT JOIN collection col ON col.cardId = c.id
+        LEFT JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
         WHERE c.setId = :setId
         ORDER BY c.sortIndex
         """
@@ -82,7 +90,7 @@ interface CatalogDao {
         """
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
-        LEFT JOIN collection col ON col.cardId = c.id
+        LEFT JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
         WHERE c.id = :cardId
         """
     )
@@ -92,7 +100,7 @@ interface CatalogDao {
         """
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
-        LEFT JOIN collection col ON col.cardId = c.id
+        LEFT JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
         WHERE c.id IN (:cardIds)
         """
     )
@@ -102,7 +110,7 @@ interface CatalogDao {
         """
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
-        LEFT JOIN collection col ON col.cardId = c.id
+        LEFT JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
         WHERE (:query != '' AND c.searchKey LIKE '%' || :query || '%')
            OR (:numberKey != '' AND c.numberKey = :numberKey AND (:total = 0 OR s.officialCount = :total))
         ORDER BY s.releaseDate DESC, s.id, c.sortIndex
@@ -115,23 +123,22 @@ interface CatalogDao {
         """
         SELECT $CARD_ITEM_COLUMNS
         FROM cards c JOIN sets s ON s.id = c.setId
-        JOIN collection col ON col.cardId = c.id
-        WHERE col.quantity > 0
+        JOIN $COLLECTION_PER_CARD col ON col.cardId = c.id
         ORDER BY col.updatedAt DESC
         LIMIT :limit
         """
     )
     fun observeRecentlyAdded(limit: Int): Flow<List<CardItem>>
 
-    @Query("SELECT id, setId, localId, name, nameEn FROM cards")
+    @Query("SELECT id, setId, localId, name, nameEn, hp FROM cards")
     suspend fun indexRows(): List<IndexCardRow>
 }
 
 @Dao
 abstract class CollectionDao {
 
-    @Query("SELECT quantity FROM collection WHERE cardId = :cardId")
-    abstract suspend fun quantity(cardId: String): Int?
+    @Query("SELECT * FROM collection WHERE cardId = :cardId AND variant = :variant")
+    abstract suspend fun entry(cardId: String, variant: String): CollectionEntity?
 
     @Upsert
     abstract suspend fun upsert(entry: CollectionEntity)
@@ -139,8 +146,12 @@ abstract class CollectionDao {
     @Upsert
     abstract suspend fun upsertAll(entries: List<CollectionEntity>)
 
+    @Query("DELETE FROM collection WHERE cardId = :cardId AND variant = :variant")
+    abstract suspend fun delete(cardId: String, variant: String)
+
+    /** Entfernt eine Karte mit allen Varianten. */
     @Query("DELETE FROM collection WHERE cardId = :cardId")
-    abstract suspend fun delete(cardId: String)
+    abstract suspend fun deleteCard(cardId: String)
 
     @Query("DELETE FROM collection")
     abstract suspend fun clear()
@@ -148,9 +159,12 @@ abstract class CollectionDao {
     @Query("SELECT * FROM collection WHERE quantity > 0")
     abstract suspend fun all(): List<CollectionEntity>
 
+    @Query("SELECT * FROM collection WHERE cardId = :cardId AND quantity > 0")
+    abstract suspend fun entriesOf(cardId: String): List<CollectionEntity>
+
     @Query(
         """
-        SELECT COUNT(*) AS uniqueCards, COALESCE(SUM(col.quantity), 0) AS copies
+        SELECT COUNT(DISTINCT col.cardId) AS uniqueCards, COALESCE(SUM(col.quantity), 0) AS copies
         FROM collection col JOIN cards k ON k.id = col.cardId
         WHERE col.quantity > 0
         """
@@ -158,29 +172,33 @@ abstract class CollectionDao {
     abstract fun observeTotals(): Flow<CollectionTotals>
 
     /**
-     * Setzt die Anzahl (0 = entfernen). Gibt die neue Anzahl zurueck.
+     * Setzt die Anzahl einer Variante (0 = entfernen). Gibt die neue Anzahl zurueck.
      * Der Zeitpunkt fuer "Zuletzt hinzugefuegt" aendert sich nur, wenn die Anzahl steigt.
      */
     @Transaction
-    open suspend fun setQuantity(cardId: String, quantity: Int): Int {
+    open suspend fun setQuantity(cardId: String, variant: String, quantity: Int): Int {
         val q = quantity.coerceIn(0, 999)
         if (q == 0) {
-            delete(cardId)
+            delete(cardId, variant)
         } else {
-            val old = entry(cardId)
+            val old = entry(cardId, variant)
             val time = if (old == null || q > old.quantity) System.currentTimeMillis() else old.updatedAt
-            upsert(CollectionEntity(cardId, q, time))
+            upsert(CollectionEntity(cardId, variant, q, time))
         }
         return q
     }
 
-    /** Erhoeht/verringert die Anzahl. Gibt die neue Anzahl zurueck. */
+    /** Erhoeht/verringert die Anzahl einer Variante. Gibt die neue Anzahl zurueck. */
     @Transaction
-    open suspend fun add(cardId: String, delta: Int): Int {
-        val current = quantity(cardId) ?: 0
-        return setQuantity(cardId, current + delta)
+    open suspend fun add(cardId: String, variant: String, delta: Int): Int {
+        val current = entry(cardId, variant)?.quantity ?: 0
+        return setQuantity(cardId, variant, current + delta)
     }
 
-    @Query("SELECT * FROM collection WHERE cardId = :cardId")
-    abstract suspend fun entry(cardId: String): CollectionEntity?
+    /** Stellt einen frueheren Stand einer Karte (alle Varianten) wieder her. */
+    @Transaction
+    open suspend fun restore(cardId: String, entries: List<CollectionEntity>) {
+        deleteCard(cardId)
+        upsertAll(entries.filter { it.quantity > 0 })
+    }
 }

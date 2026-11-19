@@ -57,11 +57,24 @@ data class CardEntity(
     /** normalisierte Nummer fuer die Suche: "025" -> "25", "TG05" -> "TG5" */
     @ColumnInfo(defaultValue = "''")
     val numberKey: String,
+    /** Varianten laut Katalog, ";"-getrennt (siehe [de.pokemoncarddetector.data.Variants]) */
+    @ColumnInfo(defaultValue = "''")
+    val variants: String = "",
+    /** Kraftpunkte (0 = keine/unbekannt) – hilft der Erkennung */
+    @ColumnInfo(defaultValue = "0")
+    val hp: Int = 0,
+    /** Regelzeichen (D, E, F, G, H, ...), leer wenn keins */
+    @ColumnInfo(defaultValue = "''")
+    val regulationMark: String = "",
 )
 
-@Entity(tableName = "collection")
+/** Eine Variante einer Karte in der Sammlung (z.B. swsh4-25 als Reverse Holo, 2x). */
+@Entity(tableName = "collection", primaryKeys = ["cardId", "variant"])
 data class CollectionEntity(
-    @PrimaryKey val cardId: String,
+    val cardId: String,
+    /** Varianten-Schluessel, "" = unbekannt */
+    @ColumnInfo(defaultValue = "''")
+    val variant: String,
     val quantity: Int,
     val updatedAt: Long,
 )
@@ -85,8 +98,23 @@ data class CardItem(
     @ColumnInfo(name = "setOfficial") val setOfficial: Int,
     @ColumnInfo(name = "setRelease") val setRelease: String,
     @ColumnInfo(name = "imageSetId") val imageSetId: String,
+    /** "variante=anzahl;..." aus der Sammlung (null = nichts gesammelt) */
+    @ColumnInfo(name = "variantQuantities") val variantQuantities: String? = null,
 ) {
     val owned: Boolean get() = quantity > 0
+
+    /** Varianten, die es von dieser Karte gibt (Katalog-Reihenfolge). */
+    val variantList: List<String> get() = de.pokemoncarddetector.data.Variants.list(card.variants)
+
+    /** Anzahl je Variante im Besitz. */
+    val quantities: Map<String, Int>
+        get() = variantQuantities.orEmpty().split(';').mapNotNull { part ->
+            val i = part.lastIndexOf('=')
+            if (i < 0) null else part.substring(0, i) to (part.substring(i + 1).toIntOrNull() ?: 0)
+        }.filter { it.second > 0 }.toMap()
+
+    /** Standard-Variante zum schnellen Hinzufuegen. */
+    val defaultVariant: String get() = de.pokemoncarddetector.data.Variants.default(variantList)
 
     /** Nummer zum Anzeigen ("%3F" -> "?"). */
     val displayLocalId: String
@@ -121,4 +149,5 @@ data class IndexCardRow(
     val localId: String,
     val name: String,
     val nameEn: String,
+    val hp: Int,
 )

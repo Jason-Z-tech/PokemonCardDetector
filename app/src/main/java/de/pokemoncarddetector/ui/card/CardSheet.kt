@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
@@ -29,6 +30,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +44,7 @@ import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.CardRepository
 import de.pokemoncarddetector.data.ImageUrls
 import de.pokemoncarddetector.data.SettingsRepository
+import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
 import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.components.CardTile
@@ -59,10 +64,16 @@ class CardSheetViewModel(
     val settings: StateFlow<AppSettings> = settings.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
 
-    fun add(delta: Int) = viewModelScope.launch { repository.add(id, delta) }
+    fun add(variant: String, delta: Int) = viewModelScope.launch { repository.add(id, variant, delta) }
+
+    /** Schalter "In meiner Sammlung": an = Standard-Variante 1x, aus = alle Varianten entfernen. */
     fun setOwned(owned: Boolean) = viewModelScope.launch {
-        val current = card.value?.quantity ?: 0
-        repository.setQuantity(id, if (owned) maxOf(1, current) else 0)
+        val c = card.value ?: return@launch
+        if (owned) {
+            if (c.quantity == 0) repository.setQuantity(id, c.defaultVariant, 1)
+        } else {
+            repository.removeCard(id)
+        }
     }
 }
 
@@ -77,6 +88,7 @@ fun CardSheet(cardId: String, onDismiss: () -> Unit, onOpenSet: ((String) -> Uni
     val item by vm.card.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var confirmRemove by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         val card = item ?: return@ModalBottomSheet
@@ -115,33 +127,88 @@ fun CardSheet(cardId: String, onDismiss: () -> Unit, onOpenSet: ((String) -> Uni
             HorizontalDivider()
             ListItem(
                 headlineContent = { Text("In meiner Sammlung") },
-                supportingContent = { Text(if (card.owned) "Du hast diese Karte" else "Fehlt dir noch") },
-                trailingContent = { Switch(checked = card.owned, onCheckedChange = { vm.setOwned(it) }) },
+                supportingContent = {
+                    Text(
+                        when {
+                            card.quantity == 0 -> "Fehlt dir noch"
+                            card.quantity == 1 -> "Du hast 1 Karte"
+                            else -> "Du hast ${card.quantity} Karten"
+                        }
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = card.owned,
+                        onCheckedChange = { on -> if (!on && card.quantity > 1) confirmRemove = true else vm.setOwned(on) },
+                    )
+                },
             )
-            Row(
-                Modifier
+            Text(
+                "Varianten",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                Text("Anzahl", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(start = 16.dp))
-                FilledTonalIconButton(onClick = { vm.add(-1) }, enabled = card.quantity > 0) {
-                    Icon(Icons.Default.Remove, contentDescription = "Eine weniger")
-                }
-                Text(
-                    "${card.quantity}",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.width(64.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    .padding(start = 16.dp, top = 4.dp),
+            )
+            val quantities = card.quantities
+            // Alle Varianten laut Katalog + evtl. gesammelte, die (noch) nicht im Katalog stehen ("unbekannt")
+            val rows = (card.variantList + quantities.keys.filter { it !in card.variantList }).ifEmpty { listOf(Variants.UNKNOWN) }
+            rows.forEach { variant ->
+                VariantRow(
+                    label = Variants.label(variant),
+                    quantity = quantities[variant] ?: 0,
+                    onMinus = { vm.add(variant, -1) },
+                    onPlus = { vm.add(variant, 1) },
                 )
-                FilledIconButton(onClick = { vm.add(1) }) {
-                    Icon(Icons.Default.Add, contentDescription = "Eine mehr")
-                }
-                Spacer(Modifier.width(16.dp))
             }
+            Text(
+                "Holo und Reverse Holo kann die Kamera nicht unterscheiden – bitte hier die richtige Variante zählen.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
             Spacer(Modifier.height(16.dp))
+        }
+    }
+
+    if (confirmRemove) {
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text("Aus der Sammlung entfernen?") },
+            text = { Text("Du hast ${item?.quantity ?: 0} Exemplare dieser Karte (alle Varianten). Wirklich alle entfernen?") },
+            confirmButton = { TextButton(onClick = { confirmRemove = false; vm.setOwned(false) }) { Text("Entfernen") } },
+            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Abbrechen") } },
+        )
+    }
+}
+
+@Composable
+private fun VariantRow(label: String, quantity: Int, onMinus: () -> Unit, onPlus: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (quantity > 0) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.weight(1f),
+        )
+        FilledTonalIconButton(onClick = onMinus, enabled = quantity > 0) {
+            Icon(Icons.Default.Remove, contentDescription = "Eine weniger: $label")
+        }
+        Text(
+            "$quantity",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.width(44.dp),
+        )
+        FilledIconButton(onClick = onPlus) {
+            Icon(Icons.Default.Add, contentDescription = "Eine mehr: $label")
         }
     }
 }

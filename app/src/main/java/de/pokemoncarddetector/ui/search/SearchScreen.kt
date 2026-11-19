@@ -47,7 +47,9 @@ import androidx.lifecycle.viewModelScope
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.CardRepository
 import de.pokemoncarddetector.data.SettingsRepository
+import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
+import de.pokemoncarddetector.data.db.CollectionEntity
 import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.card.CardSheet
 import de.pokemoncarddetector.ui.components.CardTile
@@ -87,7 +89,7 @@ internal class StableOrder {
 }
 
 sealed interface SearchEvent {
-    data class Added(val text: String, val cardId: String, val previousQuantity: Int) : SearchEvent
+    data class Added(val text: String, val cardId: String, val previous: List<CollectionEntity>) : SearchEvent
 }
 
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
@@ -115,13 +117,16 @@ class SearchViewModel(
 
     fun setQuery(q: String) { query.value = q }
 
+    /** +1 in der Standard-Variante (genaue Variante in den Kartendetails waehlbar). */
     fun add(item: CardItem) = viewModelScope.launch {
-        val before = item.quantity
-        val now = repository.add(item.card.id, 1)
-        _events.send(SearchEvent.Added("${item.card.name} (${item.setName}) – jetzt ${now}×", item.card.id, before))
+        val before = repository.snapshot(item.card.id)
+        val variant = item.defaultVariant
+        repository.add(item.card.id, variant, 1)
+        val variantText = if (item.variantList.size > 1) " als ${Variants.shortLabel(variant)}" else ""
+        _events.send(SearchEvent.Added("${item.card.name}$variantText hinzugefügt", item.card.id, before))
     }
 
-    fun undo(cardId: String, quantity: Int) = viewModelScope.launch { repository.setQuantity(cardId, quantity) }
+    fun undo(cardId: String, previous: List<CollectionEntity>) = viewModelScope.launch { repository.restore(cardId, previous) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -137,7 +142,7 @@ fun SearchScreen(onOpenSet: (String) -> Unit) {
         vm.events.collect { e ->
             if (e is SearchEvent.Added) {
                 val r = snackbar.showSnackbar(e.text, actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
-                if (r == SnackbarResult.ActionPerformed) vm.undo(e.cardId, e.previousQuantity)
+                if (r == SnackbarResult.ActionPerformed) vm.undo(e.cardId, e.previous)
             }
         }
     }

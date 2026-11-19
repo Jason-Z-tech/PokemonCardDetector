@@ -6,6 +6,8 @@ Karten pro Set. Die App liefert diesen Katalog mit aus, damit Scannen und die
 Sammlung sofort offline funktionieren. In der App kann er ueber
 "Datenbank aktualisieren" jederzeit online aufgefrischt werden.
 
+Kartenzeile: [localId, nameDe, nameEn, flags, [Varianten-Indizes], KP, Regelzeichen]
+
 Aufruf:  python3 tools/build_catalog.py
 """
 import concurrent.futures as cf
@@ -56,6 +58,61 @@ def head_ok(url):
     return False
 
 
+GRAPHQL = "https://api.tcgdex.net/v2/graphql"
+VARIANT_QUERY = '{ cards(filters: {id: "%s-"}, pagination: {page: %d, count: 100}) { id hp regulationMark variants_detailed { type subtype foil stamp size } } }'
+
+
+def graphql(query, retries=5):
+    body = json.dumps({"query": query}).encode()
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(GRAPHQL, data=body, headers={"Content-Type": "application/json", "User-Agent": "PokemonCardDetector-catalog-builder"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            if attempt == retries - 1:
+                print(f"FEHLER GraphQL: {e}", file=sys.stderr)
+                return {}
+            time.sleep(1.5 * (attempt + 1))
+
+
+def variant_key(v):
+    """Stabiler Schluessel einer Variante, z.B. 'reverse|foil=pokeball' oder 'holo|sub=shadowless|stamp=1st-edition'."""
+    parts = [v.get("type") or "normal"]
+    if v.get("subtype"):
+        parts.append("sub=" + v["subtype"])
+    if v.get("foil"):
+        parts.append("foil=" + v["foil"])
+    if v.get("stamp"):
+        parts.append("stamp=" + ",".join(v["stamp"]))
+    if v.get("size") and v["size"] != "standard":
+        parts.append("size=" + v["size"])
+    return "|".join(parts)
+
+
+def fetch_variants(set_id):
+    """localId -> (hp, regulationMark, [variant keys]) fuer ein Set (GraphQL, je 100 Karten)."""
+    out = {}
+    page = 1
+    while True:
+        r = graphql(VARIANT_QUERY % (set_id, page))
+        cards = (r.get("data") or {}).get("cards") or []
+        for c in cards:
+            if not c["id"].startswith(set_id + "-"):
+                continue
+            lid = c["id"][len(set_id) + 1:]
+            keys = []
+            for v in c.get("variants_detailed") or []:
+                k = variant_key(v)
+                if k not in keys:
+                    keys.append(k)
+            out[lid] = (c.get("hp") or 0, c.get("regulationMark") or "", keys)
+        if len(cards) < 100:
+            break
+        page += 1
+    return set_id, out
+
+
 def get(path, retries=4):
     url = f"{API}/{path}"
     for attempt in range(retries):
@@ -82,6 +139,10 @@ def main():
         futs = {ex.submit(get, f"{lang}/sets/{sid}"): (lang, sid) for lang, sid in jobs}
         for f in cf.as_completed(futs):
             details[futs[f]] = f.result()
+
+    with cf.ThreadPoolExecutor(max_workers=10) as ex:
+        variants = dict(ex.map(fetch_variants, list(dict.fromkeys(list(sets_en) + list(sets_de)))))
+    variant_index = {}
 
     out_sets = []
     used_series = {}
@@ -126,10 +187,13 @@ def main():
                     cards[lid]["imgEn"] = cards[lid]["imgEn"] or en_ok
         order.sort(key=natural_key)
         card_rows = []
+        set_variants = variants.get(sid, {})
         for lid in order:
             c = cards[lid]
             flags = (1 if c["imgDe"] else 0) | (2 if c["imgEn"] else 0) | (4 if c["de"] else 0)
-            card_rows.append([lid, c["de"] or c["en"] or "", c["en"] or c["de"] or "", flags])
+            hp, reg, keys = set_variants.get(lid, (0, "", []))
+            idx = [variant_index.setdefault(k, len(variant_index)) for k in keys]
+            card_rows.append([lid, c["de"] or c["en"] or "", c["en"] or c["de"] or "", flags, idx, hp, reg])
         logo = (de or {}).get("logo") or (en or {}).get("logo")
         symbol = (de or {}).get("symbol") or (en or {}).get("symbol")
         out_sets.append({
@@ -153,8 +217,11 @@ def main():
         for s in used_series
     ]
     catalog = {
-        "version": time.strftime("%Y-%m-%d"),
+        # Datum + Uhrzeit: neuere Kataloge vom selben Tag werden in der App trotzdem neu importiert
+        "version": time.strftime("%Y-%m-%d %H:%M"),
         "series": out_series,
+        # Varianten-Woerterbuch; Karten verweisen per Index darauf
+        "variants": [k for k, _ in sorted(variant_index.items(), key=lambda kv: kv[1])],
         "sets": out_sets,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

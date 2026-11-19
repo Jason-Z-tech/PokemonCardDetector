@@ -25,6 +25,8 @@ import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -109,6 +111,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.pokemoncarddetector.data.AppSettings
+import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
 import de.pokemoncarddetector.recognition.FrameGeometry
 import de.pokemoncarddetector.ui.appViewModel
@@ -154,7 +157,7 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 is ScanEvent.Message -> snackbar.showSnackbar(e.text)
                 is ScanEvent.Added -> {
                     val r = snackbar.showSnackbar(e.text, actionLabel = "Rückgängig", duration = SnackbarDuration.Short)
-                    if (r == SnackbarResult.ActionPerformed) vm.setQuantity(e.cardId, e.previousQuantity)
+                    if (r == SnackbarResult.ActionPerformed) vm.restore(e.cardId, e.previous)
                 }
             }
         }
@@ -300,7 +303,8 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                 DetectionCard(
                     detection = detection,
                     settings = settings,
-                    onAdd = { vm.add(detection.best.card.id) },
+                    onAdd = { vm.add(detection.best.card.id, detection.variant) },
+                    onSelectVariant = vm::selectVariant,
                     onDismiss = vm::dismissDetection,
                     onAlternatives = { showAlternatives = true },
                     onOpen = { openCard = detection.best.card.id },
@@ -479,6 +483,7 @@ private fun DetectionCard(
     onAlternatives: () -> Unit,
     onOpen: () -> Unit,
     onSearch: () -> Unit,
+    onSelectVariant: (String) -> Unit,
 ) {
     val item = detection.best
     Card(
@@ -516,6 +521,25 @@ private fun DetectionCard(
                     )
                 }
                 IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Verwerfen") }
+            }
+            if (item.variantList.size > 1) {
+                // Holo/Reverse sieht die Kamera nicht -> Variante hier waehlen
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item.variantList.forEach { v ->
+                        val have = item.quantities[v] ?: 0
+                        FilterChip(
+                            selected = detection.variant == v,
+                            onClick = { onSelectVariant(v) },
+                            label = { Text(Variants.shortLabel(v) + if (have > 0) " ($have)" else "", maxLines = 1) },
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -17,6 +17,8 @@ data class IndexCard(
     val localId: String,
     val name: String,
     val nameEn: String,
+    /** Kraftpunkte laut Katalog (0 = unbekannt / keine) */
+    val hp: Int = 0,
 ) {
     val key: String = CardTextParser.normalizeLocalId(localId)
     val nameNorm: String = TextNorm.normalize(name)
@@ -117,6 +119,7 @@ class CardMatcher(private val index: CatalogIndex) {
         const val W_CODE = 35.0
         const val W_NAME = 45.0
         const val W_YEAR = 8.0
+        const val W_HP = 12.0
         const val MAX_ALTERNATIVES = 8
     }
 
@@ -226,6 +229,8 @@ class CardMatcher(private val index: CatalogIndex) {
         if (codeMatched) s += W_CODE
         // Namensaehnlichkeit unter 0.5 ist praktisch Zufall
         s += W_NAME * ((nameScore - 0.5).coerceAtLeast(0.0) / 0.5)
+        val hp = parsed.hp
+        if (hp != null && card.hp > 0) s += if (hp == card.hp) W_HP else -W_HP / 2
         val year = parsed.maxYear
         val release = set.releaseYear
         if (year != null && release != null) {

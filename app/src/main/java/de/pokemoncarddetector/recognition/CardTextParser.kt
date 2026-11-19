@@ -31,6 +31,8 @@ data class ParsedCardText(
     val years: List<Int>,
     /** Wahrscheinliche Namenszeilen, normalisiert, wichtigste zuerst. */
     val nameLines: List<String>,
+    /** Kraftpunkte, z.B. 170 aus "KP 170" / "170 HP" (null = nicht gelesen) */
+    val hp: Int? = null,
     /** Alle Zeilen (Originaltext). */
     val allLines: List<String>,
 ) {
@@ -67,6 +69,9 @@ object CardTextParser {
 
     /** Promo-Nummer neben Set-Kuerzel (SVP/MEP haben keine Gesamtzahl), z.B. "SVP DE 049". */
     private val CODE_PROMO_NUMBER = Regex("(?<![A-Z0-9])(SVP|MEP)\\s?[•·.]?\\s?(?:(?:DE|EN|FR|IT|ES|PT|NL)\\s?)?([0-9]{1,3})(?![0-9/])")
+
+    /** "KP 170", "KP170", "170 KP", "HP 170", "PV 170" */
+    private val HP = Regex("(?<![A-Z0-9])(?:KP|HP|PV|PS)\\s?([0-9]{2,3})(?![0-9])|(?<![0-9])([0-9]{2,3})\\s?(?:KP|HP|PV|PS)(?![A-Z])")
 
     private val YEAR = Regex("(?<![0-9])(199[5-9]|20[0-4][0-9])(?![0-9])")
     private val COPYRIGHT_HINT = Regex("©|\\(C\\)|NINTENDO|POK[EÉ]MON|CREATURES|GAME ?FREAK|WIZARDS", RegexOption.IGNORE_CASE)
@@ -180,12 +185,18 @@ object CardTextParser {
             }
         }
 
+        val hp = texts.asSequence()
+            .flatMap { HP.findAll(it.uppercase()) }
+            .mapNotNull { m -> (m.groupValues[1].ifEmpty { m.groupValues[2] }).toIntOrNull() }
+            .firstOrNull { it in 30..400 && it % 10 == 0 }
+
         return ParsedCardText(
             numbers = numbers.values.toList(),
             setCodes = codes,
             years = years,
             nameLines = nameLines(lines),
             allLines = texts,
+            hp = hp,
         )
     }
 

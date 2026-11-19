@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.CardRepository
 import de.pokemoncarddetector.data.SettingsRepository
+import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
+import de.pokemoncarddetector.data.db.CollectionEntity
 import de.pokemoncarddetector.recognition.CardMatcher
 import de.pokemoncarddetector.recognition.CardTextRecognizer
 import de.pokemoncarddetector.recognition.CatalogIndex
@@ -41,6 +43,8 @@ data class Detection(
     /** zaehlt hoch bei jeder neuen Erkennung (fuer Vibration) */
     val serial: Long,
     val fromPhoto: Boolean,
+    /** gewaehlte Variante zum Hinzufuegen (Normal/Holo/Reverse/...) */
+    val variant: String = best.defaultVariant,
 )
 
 data class ScanUiState(
@@ -53,8 +57,8 @@ data class ScanUiState(
 
 sealed interface ScanEvent {
     data class Message(val text: String) : ScanEvent
-    /** Karte hinzugefuegt – mit "Rueckgaengig" auf [previousQuantity] */
-    data class Added(val text: String, val cardId: String, val previousQuantity: Int) : ScanEvent
+    /** Karte hinzugefuegt – "Rueckgaengig" stellt [previous] wieder her */
+    data class Added(val text: String, val cardId: String, val previous: List<CollectionEntity>) : ScanEvent
 }
 
 class ScanViewModel(
@@ -136,7 +140,7 @@ class ScanViewModel(
             }
             if (settings.value.autoAdd && lastAutoAdded != id) {
                 lastAutoAdded = id
-                add(id)
+                add(id, _state.value.detection?.takeIf { it.best.card.id == id }?.variant)
             }
         } else if (result.best != null && !result.confident && result.best.nameScore >= 0.85) {
             // Unsicherer Treffer (z.B. Nummer nicht lesbar): als Vorschlag zeigen, wenn nichts Sicheres da ist
@@ -233,23 +237,28 @@ class ScanViewModel(
 
     // ---------------- Aktionen ----------------
 
-    fun add(cardId: String) {
+    /** +1 fuer [cardId] in der Variante [variant] (null = Standard-Variante der Karte). */
+    fun add(cardId: String, variant: String? = null) {
         viewModelScope.launch {
-            val before = repository.cardsByIds(listOf(cardId)).firstOrNull()?.quantity ?: 0
-            val qty = repository.add(cardId, 1)
-            val item = repository.cardsByIds(listOf(cardId)).firstOrNull()
+            val before = repository.snapshot(cardId)
+            val item = repository.cardsByIds(listOf(cardId)).firstOrNull() ?: return@launch
+            val v = variant ?: item.defaultVariant
+            val qty = repository.add(cardId, v, 1)
             refreshDetection()
-            if (item != null) {
-                _events.send(ScanEvent.Added("${item.card.name} (${item.setName}) hinzugefügt – jetzt ${qty}×", cardId, before))
-            }
+            val variantText = if (item.variantList.size > 1 || v.isBlank()) " (${Variants.shortLabel(v)})" else ""
+            _events.send(ScanEvent.Added("${item.card.name}$variantText hinzugefügt – jetzt ${qty}×", cardId, before))
         }
     }
 
-    fun setQuantity(cardId: String, quantity: Int) {
+    fun restore(cardId: String, entries: List<CollectionEntity>) {
         viewModelScope.launch {
-            repository.setQuantity(cardId, quantity)
+            repository.restore(cardId, entries)
             refreshDetection()
         }
+    }
+
+    fun selectVariant(variant: String) {
+        _state.update { s -> s.copy(detection = s.detection?.copy(variant = variant)) }
     }
 
     /** Waehlt eine Alternative als richtigen Treffer. */
@@ -262,11 +271,11 @@ class ScanViewModel(
             stabilizer.reset()
             userChoice = cardId
             _state.update {
-                it.copy(detection = d.copy(best = chosen, alternatives = all - chosen, confident = true))
+                it.copy(detection = d.copy(best = chosen, alternatives = all - chosen, confident = true, variant = chosen.defaultVariant))
             }
             // Wurde die falsche Karte schon automatisch hinzugefuegt? Dann umbuchen.
             if (lastAutoAdded == replaced && replaced != cardId) {
-                repository.add(replaced, -1)
+                repository.add(replaced, d.variant, -1)
                 lastAutoAdded = cardId
                 add(cardId)
             }
