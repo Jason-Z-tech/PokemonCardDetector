@@ -12,7 +12,8 @@ und legt sie in deiner Sammlung ab – sortiert nach Serien und Sets (z. B. *Far
   den Kartennamen (deutsch **und** englisch) und das Copyright-Jahr. Bei mehreren möglichen Treffern zeigt die App eine Auswahl.
 - **Sammlung nach Sets** – alle Sets (206), gruppiert nach Serien, mit Fortschritt (`12/203`), Suchfeld und Filter „Nur meine Sets“.
 - **Set-Ansicht** mit allen Karten als Bilder; fehlende Karten grau. Filter *Alle / Habe ich / Fehlen*.
-  Tippen → Details mit Anzahl (+/−) und Schalter „In meiner Sammlung“; lange drücken → Karte direkt an/aus.
+  Tippen → Details mit Anzahl (+/−) und Schalter „In meiner Sammlung“; lange drücken auf eine fehlende Karte
+  → direkt als „habe ich“ markieren (mit *Rückgängig*).
 - **Bilder an/aus** – Umschalter oben rechts (Textansicht spart mobile Daten).
 - **Suche** nach Name oder Nummer, um Karten auch ohne Scan hinzuzufügen.
 - **Automatisch hinzufügen** (optional): erkannte Karten landen ohne Tippen in der Sammlung.
@@ -28,6 +29,15 @@ und legt sie in deiner Sammlung ab – sortiert nach Serien und Sets (z. B. *Far
 3. App „Karten-Scanner“ öffnen und den Kamerazugriff erlauben.
 
 Voraussetzung: Android 8.0 oder neuer.
+
+**Updates:** Alle APKs dieses Projekts (auch die aus GitHub Actions) sind mit demselben Schlüssel
+(`keystore/karten-scanner.jks`) signiert. Eine neue Version lässt sich deshalb einfach über die alte
+installieren – deine Sammlung bleibt erhalten. Sichere die Sammlung trotzdem ab und zu
+(*Einstellungen → Sammlung sichern*).
+
+> Der Schlüssel liegt bewusst im Repository, damit Builds überall gleich signiert sind. Das ist für eine
+> private App in Ordnung. Wer die App öffentlich verteilen will (z. B. im Play Store), sollte einen
+> eigenen, geheimen Schlüssel verwenden (`KEYSTORE_FILE`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`).
 
 ## Tipps zum Scannen
 
