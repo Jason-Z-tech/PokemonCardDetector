@@ -75,7 +75,8 @@ class PokeApp : Application(), ImageLoaderFactory {
         // Preise aktuell halten: beim Start (nur veraltete) + taeglich im Hintergrund
         container.appScope.launch {
             val settings = container.settings.settings.first()
-            PriceWorker.schedule(this@PokeApp, settings.autoPrices)
+            // Ein Problem mit WorkManager darf den Preis-Abruf beim Start nicht verhindern
+            runCatching { PriceWorker.schedule(this@PokeApp, settings.autoPrices) }
             container.catalogManager.state.first { it == CatalogState.Ready }
             if (settings.autoPrices) runCatching { container.priceRepository.refreshTracked() }
         }

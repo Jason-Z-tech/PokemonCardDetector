@@ -68,6 +68,8 @@ data class WishlistUiState(
     val missing: List<WishRow> = emptyList(),
     val received: List<WishRow> = emptyList(),
     val totalMissing: Double = 0.0,
+    /** fehlende Karten, fuer die (noch) kein Preis bekannt ist */
+    val unpricedMissing: Int = 0,
     val sort: WishSort = WishSort.PRICE,
     val settings: AppSettings = AppSettings(),
     val loading: Boolean = true,
@@ -106,6 +108,7 @@ class WishlistViewModel(
             missing = missing,
             received = sorted.filter(::received),
             totalMissing = missing.sumOf { it.price ?: 0.0 },
+            unpricedMissing = missing.count { it.price == null },
             sort = s,
             settings = settings,
             loading = false,
@@ -158,12 +161,31 @@ fun WishlistScreen(onOpenSet: (String) -> Unit) {
                 ) {
                     Column(Modifier.padding(16.dp)) {
                         Text(
-                            if (state.missing.size == 1) "1 Karte fehlt noch" else "${state.missing.size} Karten fehlen noch",
+                            when (state.missing.size) {
+                                0 -> "Keine Wunschkarte fehlt mehr"
+                                1 -> "1 Karte fehlt noch"
+                                else -> "${state.missing.size} Karten fehlen noch"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                         )
-                        Text("ca. ${euro(state.totalMissing)}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                        val noPriceYet = state.missing.isNotEmpty() && state.unpricedMissing == state.missing.size
                         Text(
-                            "${state.settings.priceMetric.label} bei Cardmarket",
+                            when {
+                                state.missing.isEmpty() -> "Alles da!"
+                                noPriceYet -> "Preis noch unbekannt"
+                                else -> "ca. ${euro(state.totalMissing)}"
+                            },
+                            style = if (noPriceYet) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            buildString {
+                                append("${state.settings.priceMetric.label} bei Cardmarket")
+                                if (state.unpricedMissing > 0 && !noPriceYet) {
+                                    append(" · ")
+                                    append(if (state.unpricedMissing == 1) "1 Karte ohne Preis" else "${state.unpricedMissing} Karten ohne Preis")
+                                }
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

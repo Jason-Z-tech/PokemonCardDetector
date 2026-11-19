@@ -72,9 +72,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 
 data class TopCard(val item: CardItem, val value: Double)
 
@@ -158,8 +160,9 @@ class StatsViewModel(
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
         // Nur Tage, an denen der Wert fuer DIESE Preisart gespeichert wurde (sonst Spruenge beim Umschalten)
         val snapshots = i.history.filter { it.date != today && it.centsFor(metric) != null }
-        val history = snapshots.map { ChartPoint(germanDate(it.date).take(6), it.centsFor(metric)!! / 100.0) } +
-            ChartPoint("heute", value.totalEuro)
+        // Ohne einen einzigen Preis gibt es keinen sinnvollen heutigen Punkt (sonst "0,00 € heute")
+        val livePoint = if (value.pricedCards > 0 || i.rows.isEmpty()) listOf(ChartPoint("heute", value.totalEuro)) else emptyList()
+        val history = snapshots.map { ChartPoint(germanDate(it.date).take(6), it.centsFor(metric)!! / 100.0) } + livePoint
         val weekAgo = snapshots.lastOrNull { daysBetween(it.date, today) >= 7 } ?: snapshots.firstOrNull()
         val delta = weekAgo?.let { value.totalEuro - it.centsFor(metric)!! / 100.0 }
 
@@ -218,7 +221,7 @@ class StatsViewModel(
             wishCost = wishCost,
             settings = i.settings,
         )
-    }
+    }.flowOn(Dispatchers.Default) // Rechnen nicht im UI-Thread (grosse Sammlungen)
 
     val state: StateFlow<StatsUiState> = combine(
         computed, prices.state, prices.observeOldestTrackedFetch(), prices.observeUnfetchedCount(),
@@ -351,7 +354,15 @@ private fun HeroCard(state: StatsUiState) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
             Text("Wert deiner Sammlung", style = MaterialTheme.typography.labelLarge)
-            FitText(if (state.loading) "…" else euro(state.totalValue), maxSize = 48.sp)
+            FitText(
+                when {
+                    state.loading -> "…"
+                    // Noch kein einziger Preis bekannt: "–" statt eines irrefuehrenden "0,00 €"
+                    state.pricedCards == 0 && state.unpricedCards > 0 -> "–"
+                    else -> euro(state.totalValue)
+                },
+                maxSize = 48.sp,
+            )
             val d = state.delta
             if (d != null && state.deltaSince != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
