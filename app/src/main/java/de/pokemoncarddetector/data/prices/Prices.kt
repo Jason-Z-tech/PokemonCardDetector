@@ -42,6 +42,7 @@ fun PriceEntity.value(metric: PriceMetric): Double? = when (metric) {
  *  - Normal                -> trend
  *  - Reverse (gleiches Produkt wie Normal) -> trend-holo
  *  - Holo / Sonder-Reverse mit eigenem Produkt -> trend bzw. bei Reverse trend-holo, falls vorhanden
+ *  - Variante ohne eigenes Produkt (1. Edition, Staff, ...) -> Preis des geteilten Produkts, markiert als [PriceEntity.shared]
  */
 object PriceParser {
 
@@ -55,16 +56,16 @@ object PriceParser {
         val details = (json["variants_detailed"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         // Schluessel: aus den (englischen) Feldern, sonst ueber die Position im Katalog
         val keys = details.mapIndexed { i, v -> if (canonicalKeys) variantKey(v) else catalogVariants.getOrNull(i) ?: variantKey(v) }
+        val ownIds = details.map { ((it["thirdParty"] as? JsonObject)?.get("cardmarket") as? JsonPrimitive)?.longOrNull }
         val top = (json["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject
-        // Haupt-Produkt der Karte: Normal (bzw. Holo bei Holo-Raren) – oder der Kartenpreis
-        val primary = if ("normal" in keys) "normal" else "holo"
+        val primary = primaryVariant(keys, ownIds, (top?.get("idProduct") as? JsonPrimitive)?.longOrNull)
         val base = details.indices.firstNotNullOfOrNull { i -> details[i].cardmarket()?.takeIf { keys[i] == primary } } ?: top
         val baseId = (base?.get("idProduct") as? JsonPrimitive)?.longOrNull
 
         val out = LinkedHashMap<String, PriceEntity>()
         details.forEachIndexed { i, v ->
             val key = keys[i]
-            val ownId = ((v["thirdParty"] as? JsonObject)?.get("cardmarket") as? JsonPrimitive)?.longOrNull
+            val ownId = ownIds[i]
             // Ohne eigene Preisangabe: nur das Haupt-Produkt und das einfache Reverse duerfen den Produktpreis erben
             // (Reverse = Holo-Preis desselben Produkts). Sonder-Varianten (Stempel, Muster, Untertyp) nie.
             val cm = v.cardmarket()
@@ -73,18 +74,34 @@ object PriceParser {
             price(cardId, key, cm, key.startsWith("reverse"), now)?.let { out[key] = it }
         }
         // Varianten, die bei Cardmarket kein eigenes Produkt haben (z.B. 1. Edition: nur ein Merkmal des Angebots),
-        // bekommen keinen eigenen Preis – sonst stuende der Preis der Grundkarte als "ihr" Preis da.
+        // teilen sich das Produkt einer allgemeineren Variante. Ihr Preis bleibt als Untergrenze erhalten
+        // (die 1. Edition ist meist mehr wert), wird aber als "gemeinsam" markiert und nie als eigener Preis gezeigt.
         val shared = out.keys.filter { key ->
             val parts = key.split('|').toSet()
             val id = out[key]?.idProduct ?: return@filter false
             out.any { (other, p) -> other != key && p.idProduct == id && other.split('|').toSet().let { it.size < parts.size && parts.containsAll(it) } }
         }
-        shared.forEach { out.remove(it) }
+        shared.forEach { key -> out[key] = out.getValue(key).copy(shared = true) }
         // Karte ohne Varianten-Details: Preis der Karte als "ohne Variante"
         if (out.isEmpty() && top != null) {
             price(cardId, Variants.UNKNOWN, top, reverse = false, now)?.let { out[Variants.UNKNOWN] = it }
         }
         return out.values.toList()
+    }
+
+    /**
+     * Haupt-Produkt der Karte (darf den Kartenpreis erben, wenn es selbst keine Preisangabe hat):
+     *  1. die Variante, deren Cardmarket-Produkt der Kartenpreis ist (ohne Reverse, einfache Varianten zuerst),
+     *  2. sonst die erste von Normal/Holo in TCGdex-Reihenfolge – bei Holo-Raren mit spaeter gelistetem "Normal"
+     *     (dp6-5, hgss3-1, ex4-3) ist das der Holo-Druck, "Normal" ist dort ein Neben-Druck,
+     *  3. sonst "normal".
+     */
+    internal fun primaryVariant(keys: List<String>, ownIds: List<Long?>, topId: Long?): String {
+        val onTop = if (topId == null) emptyList() else keys.filterIndexed { i, k -> ownIds.getOrNull(i) == topId && !k.startsWith("reverse") }
+        return onTop.firstOrNull { !it.contains('|') }
+            ?: onTop.firstOrNull()
+            ?: keys.firstOrNull { it == "normal" || it == "holo" }
+            ?: "normal"
     }
 
     private fun JsonObject.cardmarket(): JsonObject? =
@@ -123,14 +140,24 @@ object PriceParser {
     private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
 }
 
+/** Preis einer Variante; [exact] = eigener Cardmarket-Preis genau dieser Variante, sonst eine Untergrenze ("ab"). */
+data class VariantPrice(val euro: Double, val exact: Boolean)
+
 /**
- * Preis fuer eine gesammelte Variante. Fehlt der Preis genau dieser Variante (oder ist die Variante
- * unbekannt), wird der niedrigste bekannte Preis der Karte genommen – lieber zu niedrig als zu hoch.
+ * Preis fuer eine (gesammelte/gewuenschte) Variante:
+ *  1. eigener Preis der Variante,
+ *  2. sonst der Preis des Produkts, das sie mit einer allgemeineren Variante teilt (z.B. 1. Edition), als Untergrenze,
+ *  3. sonst (oder bei unbekannter Variante) der niedrigste bekannte Preis der Karte – lieber zu niedrig als zu hoch.
  */
-fun priceFor(cardPrices: List<PriceEntity>, variant: String, metric: PriceMetric): Double? {
-    cardPrices.firstOrNull { it.variant == variant }?.value(metric)?.let { return it }
-    return cardPrices.mapNotNull { it.value(metric) }.minOrNull()
+fun variantPrice(cardPrices: List<PriceEntity>, variant: String, metric: PriceMetric): VariantPrice? {
+    cardPrices.firstOrNull { it.variant == variant && !it.shared }?.value(metric)?.let { return VariantPrice(it, exact = true) }
+    cardPrices.firstOrNull { it.variant == variant && it.shared }?.value(metric)?.let { return VariantPrice(it, exact = false) }
+    return cardPrices.mapNotNull { it.value(metric) }.minOrNull()?.let { VariantPrice(it, exact = false) }
 }
+
+/** Wert einer Variante fuer Sammlungswert und Wunschliste (siehe [variantPrice]). */
+fun priceFor(cardPrices: List<PriceEntity>, variant: String, metric: PriceMetric): Double? =
+    variantPrice(cardPrices, variant, metric)?.euro
 
 data class CollectionValue(
     val totalEuro: Double,

@@ -5,6 +5,7 @@ import de.pokemoncarddetector.data.db.CollectionRow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,8 +45,12 @@ class PricesTest {
         val p = parse("base1-4")
         assertEquals(290.28, p.getValue("holo|sub=unlimited").trend!!, 0.001)
         assertEquals(3489.25, p.getValue("holo|sub=shadowless").trend!!, 0.001)
-        // 1. Edition ist bei Cardmarket kein eigenes Produkt (gleiche ID wie "schattenlos") -> kein eigener Preis
-        assertNull(p["holo|sub=shadowless|stamp=1st-edition"])
+        // 1. Edition ist bei Cardmarket kein eigenes Produkt (gleiche ID wie "schattenlos") -> geteilter Preis
+        val first = p.getValue("holo|sub=shadowless|stamp=1st-edition")
+        assertTrue(first.shared)
+        assertEquals(660224L, first.idProduct)
+        assertFalse(p.getValue("holo|sub=shadowless").shared)
+        assertFalse(p.getValue("holo|sub=unlimited").shared)
         // Variante ohne Cardmarket-Daten bekommt keinen (falschen) Preis
         assertNull(p["holo|sub=1999-2000-copyright"])
     }
@@ -54,8 +59,10 @@ class PricesTest {
     fun ersteEditionOhneEigenesProdukt() {
         val p = parse("neo1-1")
         assertEquals(22.89, p.getValue("holo").trend!!, 0.001)
-        assertNull(p["holo|stamp=1st-edition"])
-        // Anzeige faellt auf den guenstigsten Preis der Karte zurueck ("ab …")
+        assertTrue(p.getValue("holo|stamp=1st-edition").shared)
+        // Wert = Preis des geteilten Produkts, aber nur als Untergrenze ("ab …")
+        assertEquals(VariantPrice(22.89, exact = false), variantPrice(p.values.toList(), "holo|stamp=1st-edition", PriceMetric.TREND))
+        assertEquals(VariantPrice(22.89, exact = true), variantPrice(p.values.toList(), "holo", PriceMetric.TREND))
         assertEquals(22.89, priceFor(p.values.toList(), "holo|stamp=1st-edition", PriceMetric.TREND)!!, 0.001)
     }
 
@@ -102,6 +109,98 @@ class PricesTest {
         assertEquals(13.8, p.value(PriceMetric.TREND)!!, 0.001)
         assertEquals(9.04, p.value(PriceMetric.AVG30)!!, 0.001)
         assertEquals(0.5, p.value(PriceMetric.LOW)!!, 0.001)
+    }
+
+    @Test
+    fun holoRareMitNebenDruckNormalOhneVariantenPreise() {
+        // dp6-5: Varianten ohne Preisangabe und ohne Produkt-ID, Kartenpreis = Holo-Produkt (TCGdex listet Holo zuerst)
+        val p = parse("dp6-5")
+        assertEquals(1.28, p.getValue("holo").trend!!, 0.001)
+        assertEquals(278154L, p.getValue("holo").idProduct)
+        assertEquals(3.47, p.getValue("reverse").trend!!, 0.001)
+        // "Normal" ist nicht der Haupt-Druck: kein eigener Preis, Anzeige nur "ab …"
+        assertNull(p["normal"])
+        assertEquals(VariantPrice(1.28, exact = false), variantPrice(p.values.toList(), "normal", PriceMetric.TREND))
+        assertEquals(VariantPrice(1.28, exact = true), variantPrice(p.values.toList(), "holo", PriceMetric.TREND))
+    }
+
+    @Test
+    fun holoRareHauptProduktUeberProduktId() {
+        // hgss3-1: Holo traegt die Produkt-ID des Kartenpreises, Normal hat weder Preis noch Cardmarket-ID
+        val p = parse("hgss3-1")
+        assertEquals(3.64, p.getValue("holo").trend!!, 0.001)
+        assertEquals(3.29, p.getValue("reverse").trend!!, 0.001)
+        assertNull(p["normal"])
+        assertEquals(setOf("holo", "reverse"), p.keys)
+    }
+
+    @Test
+    fun hauptVarianteNachProduktIdSonstReihenfolge() {
+        // Produkt-ID des Kartenpreises entscheidet (Reverse zaehlt nicht, einfache Varianten zuerst)
+        assertEquals("holo", PriceParser.primaryVariant(listOf("normal", "holo"), listOf(1L, 2L), 2L))
+        assertEquals("normal", PriceParser.primaryVariant(listOf("reverse", "normal"), listOf(5L, 5L), 5L))
+        assertEquals("normal", PriceParser.primaryVariant(listOf("normal", "reverse", "reverse|foil=league|stamp=staff"), listOf(7L, 7L, 7L), 7L))
+        assertEquals("holo|sub=unlimited", PriceParser.primaryVariant(listOf("holo|sub=unlimited", "holo|sub=shadowless"), listOf(1L, 2L), 1L))
+        // Ohne Produkt-ID: erstes Normal/Holo in TCGdex-Reihenfolge, sonst "normal"
+        assertEquals("holo", PriceParser.primaryVariant(listOf("holo", "reverse", "normal"), listOf(null, null, null), 9L))
+        assertEquals("normal", PriceParser.primaryVariant(listOf("reverse", "normal"), listOf(null, null), null))
+        assertEquals("normal", PriceParser.primaryVariant(listOf("reverse|foil=pokeball"), listOf(null), null))
+    }
+
+    @Test
+    fun ersteEditionSchattenlosMitPreisDesSchattenlosProdukts() {
+        val prices = parse("base1-4").values.toList()
+        val first = "holo|sub=shadowless|stamp=1st-edition"
+        // Untergrenze = Produkt "schattenlos" (3.489,25 €), nicht das guenstigere Unlimited (290,28 €)
+        assertEquals(3489.25, priceFor(prices, first, PriceMetric.TREND)!!, 0.001)
+        assertEquals(VariantPrice(3489.25, exact = false), variantPrice(prices, first, PriceMetric.TREND))
+        val v = collectionValue(listOf(CollectionRow("base1-4", first, 1)), prices, PriceMetric.TREND)
+        assertEquals(3489.25, v.totalEuro, 0.001)
+        // Variante ohne jede Cardmarket-Angabe: guenstigster Preis der Karte, ebenfalls nur "ab"
+        assertEquals(VariantPrice(290.28, exact = false), variantPrice(prices, "holo|sub=1999-2000-copyright", PriceMetric.TREND))
+    }
+
+    @Test
+    fun ersteEditionNichtMitPrereleaseProdukt() {
+        // base5-8: 1. Edition teilt das Produkt mit Holo (101,47 €), Prerelease ist ein eigenes, billigeres Produkt
+        val p = parse("base5-8")
+        assertFalse(p.getValue("holo").shared)
+        assertFalse(p.getValue("holo|stamp=pre-release").shared)
+        assertTrue(p.getValue("holo|stamp=1st-edition").shared)
+        val prices = p.values.toList()
+        assertEquals(101.47, priceFor(prices, "holo|stamp=1st-edition", PriceMetric.TREND)!!, 0.001)
+        assertEquals(63.86, priceFor(prices, "holo|stamp=pre-release", PriceMetric.TREND)!!, 0.001)
+        assertEquals(VariantPrice(63.86, exact = true), variantPrice(prices, "holo|stamp=pre-release", PriceMetric.TREND))
+    }
+
+    @Test
+    fun staffReverseMitPreisDesReverseProdukts() {
+        // pl3-106: Staff-Liga-Reverse hat die Produkt-ID von Normal/Reverse -> Reverse-Preis (9,26 €) als Untergrenze
+        val p = parse("pl3-106")
+        assertEquals(0.3, p.getValue("normal").trend!!, 0.001)
+        assertEquals(9.26, p.getValue("reverse").trend!!, 0.001)
+        assertFalse(p.getValue("reverse|foil=league").shared)
+        val staff = p.getValue("reverse|foil=league|stamp=staff")
+        assertTrue(staff.shared)
+        assertEquals(9.26, staff.trend!!, 0.001)
+        val prices = p.values.toList()
+        assertEquals(VariantPrice(9.26, exact = false), variantPrice(prices, "reverse|foil=league|stamp=staff", PriceMetric.TREND))
+        val v = collectionValue(
+            listOf(CollectionRow("pl3-106", "reverse|foil=league|stamp=staff", 1), CollectionRow("pl3-106", "normal", 2)),
+            prices, PriceMetric.TREND,
+        )
+        assertEquals(9.26 + 2 * 0.3, v.totalEuro, 0.001)
+    }
+
+    @Test
+    fun eigenerPreisVorGeteiltemPreisVorGuenstigstem() {
+        fun row(variant: String, trend: Double, shared: Boolean = false) =
+            de.pokemoncarddetector.data.db.PriceEntity("x-1", variant, trend, null, null, null, 1L, "", 1L, shared = shared)
+        val prices = listOf(row("normal", 1.0), row("normal|stamp=staff", 5.0, shared = true), row("holo", 0.5))
+        assertEquals(VariantPrice(1.0, exact = true), variantPrice(prices, "normal", PriceMetric.TREND))
+        assertEquals(VariantPrice(5.0, exact = false), variantPrice(prices, "normal|stamp=staff", PriceMetric.TREND))
+        assertEquals(VariantPrice(0.5, exact = false), variantPrice(prices, "reverse", PriceMetric.TREND))
+        assertNull(variantPrice(emptyList(), "normal", PriceMetric.TREND))
     }
 
     @Test

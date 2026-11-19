@@ -29,6 +29,12 @@ data class PriceEntity(
     val priceDate: String,
     /** wann die App den Preis geholt hat (ms) */
     val fetchedAt: Long,
+    /**
+     * true = die Variante hat bei Cardmarket kein eigenes Produkt (z.B. 1. Edition, Staff-Stempel), sondern teilt es
+     * mit einer allgemeineren Variante. Der Preis ist dann nur eine Untergrenze ("ab …"), nie ihr eigener Preis.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val shared: Boolean = false,
 )
 
 /** Karte auf der Wunschliste. variant = "" bedeutet "egal welche Variante". */

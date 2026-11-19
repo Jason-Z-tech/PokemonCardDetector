@@ -20,8 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import de.pokemoncarddetector.data.db.PriceEntity
 import de.pokemoncarddetector.data.db.WishEntity
 import de.pokemoncarddetector.data.prices.PriceRepository
-import de.pokemoncarddetector.data.prices.priceFor
-import de.pokemoncarddetector.data.prices.value
+import de.pokemoncarddetector.data.prices.variantPrice
 import de.pokemoncarddetector.ui.components.euro
 import de.pokemoncarddetector.ui.components.germanDate
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -213,14 +212,14 @@ fun CardSheet(cardId: String, onDismiss: () -> Unit, onOpenSet: ((String) -> Uni
             val rows = (card.variantList + quantities.keys.filter { it !in card.variantList }).ifEmpty { listOf(Variants.UNKNOWN) }
             val metric = settings.priceMetric
             rows.forEach { variant ->
-                val own = prices.firstOrNull { it.variant == variant }?.value(metric)
-                // Ohne eigenen Preis (oder unbekannte Variante): guenstigster Preis der Karte als "ab"
-                val fallback = if (own == null) priceFor(prices, variant, metric) else null
+                // Eigener Preis der Variante als "Trend …"; sonst (gemeinsames Produkt wie bei der 1. Edition,
+                // fehlender Preis oder unbekannte Variante) nur eine Untergrenze als "ab …"
+                val p = variantPrice(prices, variant, metric)
                 VariantRow(
                     label = Variants.label(variant),
                     price = when {
-                        own != null -> "${metric.short} ${euro(own)}"
-                        fallback != null -> "ab ${euro(fallback)}"
+                        p != null && p.exact -> "${metric.short} ${euro(p.euro)}"
+                        p != null -> "ab ${euro(p.euro)}"
                         loadingPrice -> "Preis wird geladen …"
                         else -> "kein Preis"
                     },
