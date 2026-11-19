@@ -93,7 +93,7 @@ class LibraryViewModel(
     val state: StateFlow<LibraryUiState> = combine(
         settingsRepo.settings.map { it.libraryJapanese }.distinctUntilChanged().flatMapLatest { repository.observeSets(it) },
         repository.observeSeries(),
-        repository.observeTotals(),
+        settingsRepo.settings.map { it.libraryJapanese }.distinctUntilChanged().flatMapLatest { repository.observeTotals(it) },
         settingsRepo.settings,
         query,
     ) { sets, series, totals, settings, q ->
@@ -278,7 +278,10 @@ private fun SetRow(item: SetWithProgress, showImages: Boolean, onClick: () -> Un
             val sub = buildString {
                 append(set.releaseDate.take(4))
                 if (set.abbreviation.isNotBlank()) append(" · ").append(set.abbreviation)
-                if (!set.availableInGerman) append(" · nur Englisch")
+                when {
+                    set.id.startsWith("ja:") -> append(" · Japanisch")
+                    !set.availableInGerman -> append(" · nur Englisch")
+                }
                 if (item.copies > item.owned) append(" · ${item.copies} Karten inkl. Doppelte")
             }
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)

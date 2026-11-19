@@ -1,7 +1,7 @@
 package de.pokemoncarddetector.ui.stats
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -81,16 +81,15 @@ fun ValueLineChart(points: List<ChartPoint>, format: (Double) -> String, modifie
                     .padding(vertical = 8.dp)
                     .semantics { contentDescription = "Wertverlauf von ${points.first().label} bis ${points.last().label}" }
                     .pointerInput(points) {
-                        fun pick(x: Float) {
-                            val i = ((x / size.width) * (points.size - 1)).roundToInt().coerceIn(0, points.size - 1)
-                            selected = i
-                        }
-                        detectTapGestures(onPress = { pick(it.x) })
+                        detectTapGestures(onTap = { pos ->
+                            selected = ((pos.x / size.width) * (points.size - 1)).roundToInt().coerceIn(0, points.size - 1)
+                        })
                     }
+                    // nur waagerechtes Ziehen bewegt das Fadenkreuz – senkrecht scrollt die Liste weiter
                     .pointerInput(points) {
-                        detectDragGestures { change, _ ->
-                            val i = ((change.position.x / size.width) * (points.size - 1)).roundToInt().coerceIn(0, points.size - 1)
-                            selected = i
+                        detectHorizontalDragGestures { change, _ ->
+                            change.consume()
+                            selected = ((change.position.x / size.width) * (points.size - 1)).roundToInt().coerceIn(0, points.size - 1)
                         }
                     },
             ) {

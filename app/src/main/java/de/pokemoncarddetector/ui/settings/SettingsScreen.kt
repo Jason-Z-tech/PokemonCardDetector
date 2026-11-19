@@ -124,7 +124,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             HorizontalDivider()
             Section("Preise (Cardmarket)")
             val priceState by container.priceRepository.state.collectAsStateWithLifecycle()
-            val lastFetch by container.priceRepository.observeLastFetch().collectAsStateWithLifecycle(null)
+            val lastFetch by container.priceRepository.observeOldestTrackedFetch().collectAsStateWithLifecycle(null)
             Text(
                 "Welcher Preis angezeigt und für den Sammlungswert verwendet wird",
                 style = MaterialTheme.typography.bodySmall,
@@ -135,7 +135,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.selectable(
                         selected = settings.priceMetric == m,
                         role = Role.RadioButton,
-                        onClick = { scope.launch { container.settings.setPriceMetric(m); container.priceRepository.snapshotValue() } },
+                        onClick = { scope.launch { container.settings.setPriceMetric(m) } },
                     ),
                     leadingContent = { RadioButton(selected = settings.priceMetric == m, onClick = null) },
                     headlineContent = { Text(m.label) },
@@ -155,15 +155,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                 headlineContent = { Text("Preise jetzt aktualisieren") },
                 supportingContent = {
                     Column {
-                        Text(lastFetch?.let { "Zuletzt: ${germanDateTime(it)}" } ?: "Noch keine Preise geladen")
+                        Text(lastFetch?.let { "Ältester Preis-Stand: ${germanDateTime(it)}" } ?: "Noch keine Preise geladen")
                         when (val ps = priceState) {
                             is PriceRefreshState.Running -> LinearProgressIndicator(
                                 progress = { if (ps.total == 0) 1f else ps.done.toFloat() / ps.total },
                                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                             )
                             is PriceRefreshState.Done -> Text(
-                                "${ps.updated} Karten aktualisiert" + if (ps.failed > 0) ", ${ps.failed} fehlgeschlagen" else "",
-                                color = MaterialTheme.colorScheme.primary,
+                                when {
+                                    ps.offline -> "Keine Internetverbindung – Preise bleiben auf dem letzten Stand"
+                                    else -> (if (ps.updated == 1) "1 Karte aktualisiert" else "${ps.updated} Karten aktualisiert") +
+                                        if (ps.failed > 0) ", ${ps.failed} fehlgeschlagen" else ""
+                                },
+                                color = if (ps.offline) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                             )
                             PriceRefreshState.Idle -> {}
                         }
@@ -171,7 +175,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 },
                 trailingContent = {
                     TextButton(
-                        onClick = { scope.launch { runCatching { container.priceRepository.refreshTracked(force = true) } } },
+                        onClick = { container.priceRepository.refreshAllInBackground(force = true) },
                         enabled = priceState !is PriceRefreshState.Running,
                     ) { Text("Laden") }
                 },
@@ -260,7 +264,7 @@ private suspend fun doImport(context: android.content.Context, container: de.pok
         val text = withContext(Dispatchers.IO) {
             context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: error("Datei nicht lesbar")
         }
-        container.repository.importJson(text, replace)
+        container.repository.importJson(text, replace).also { container.priceRepository.refreshAllInBackground(force = false) }
     }
     val msg = result.fold({ if (it == 1) "1 Karte geladen" else "$it Karten geladen" }, { "Keine gültige Sicherungsdatei" })
     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()

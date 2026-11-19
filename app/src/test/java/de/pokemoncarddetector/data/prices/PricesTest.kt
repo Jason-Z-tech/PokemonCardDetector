@@ -42,10 +42,36 @@ class PricesTest {
     @Test
     fun grundsetVarianten() {
         val p = parse("base1-4")
-        assertTrue(p.containsKey("holo|sub=unlimited"))
-        assertTrue(p.getValue("holo|sub=shadowless|stamp=1st-edition").trend!! > p.getValue("holo|sub=unlimited").trend!!)
+        assertEquals(290.28, p.getValue("holo|sub=unlimited").trend!!, 0.001)
+        assertEquals(3489.25, p.getValue("holo|sub=shadowless").trend!!, 0.001)
+        // 1. Edition ist bei Cardmarket kein eigenes Produkt (gleiche ID wie "schattenlos") -> kein eigener Preis
+        assertNull(p["holo|sub=shadowless|stamp=1st-edition"])
         // Variante ohne Cardmarket-Daten bekommt keinen (falschen) Preis
         assertNull(p["holo|sub=1999-2000-copyright"])
+    }
+
+    @Test
+    fun ersteEditionOhneEigenesProdukt() {
+        val p = parse("neo1-1")
+        assertEquals(22.89, p.getValue("holo").trend!!, 0.001)
+        assertNull(p["holo|stamp=1st-edition"])
+        // Anzeige faellt auf den guenstigsten Preis der Karte zurueck ("ab …")
+        assertEquals(22.89, priceFor(p.values.toList(), "holo|stamp=1st-edition", PriceMetric.TREND)!!, 0.001)
+    }
+
+    @Test
+    fun reverseOhneEigenePreisangabeNutztHoloPreisDesProdukts() {
+        // Karmesin & Purpur / Schwert & Schild: Preise nur auf Kartenebene
+        val sv = parse("sv01-001")
+        assertEquals(0.03, sv.getValue("normal").trend!!, 0.001)
+        assertEquals(0.15, sv.getValue("reverse").trend!!, 0.001)
+        val sw = parse("swsh1-146")
+        assertEquals(0.06, sw.getValue("normal").trend!!, 0.001)
+        assertEquals(0.49, sw.getValue("reverse").trend!!, 0.001)
+        // Japanisch: Reverse ohne Preis, Normal-Produkt hat den Holo-Preis
+        val ja = parse("ja:S12a-023", "ja-S12a-023")
+        assertEquals(0.02, ja.getValue("normal").trend!!, 0.001)
+        assertEquals(1.85, ja.getValue("reverse").trend!!, 0.001)
     }
 
     @Test

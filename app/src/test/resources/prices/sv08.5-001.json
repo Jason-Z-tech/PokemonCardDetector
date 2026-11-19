@@ -5,9 +5,12 @@
   {
    "type": "normal",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 805390
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.974Z",
      "unit": "EUR",
      "idProduct": 805390,
      "avg": 0.03,
@@ -28,9 +31,12 @@
   {
    "type": "reverse",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 805390
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.974Z",
      "unit": "EUR",
      "idProduct": 805390,
      "avg": 0.03,
@@ -52,9 +58,12 @@
    "type": "reverse",
    "size": "standard",
    "foil": "pokeball",
+   "thirdParty": {
+    "cardmarket": 806408
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.974Z",
      "unit": "EUR",
      "idProduct": 806408,
      "avg": null,
@@ -76,9 +85,12 @@
    "type": "reverse",
    "size": "standard",
    "foil": "masterball",
+   "thirdParty": {
+    "cardmarket": 806409
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.974Z",
      "unit": "EUR",
      "idProduct": 806409,
      "avg": null,
@@ -99,7 +111,7 @@
  ],
  "pricing": {
   "cardmarket": {
-   "updated": "2026-11-18T22:16:18.967Z",
+   "updated": "2026-11-18T22:16:18.974Z",
    "unit": "EUR",
    "idProduct": 805390,
    "avg": 0.03,

@@ -56,6 +56,7 @@ import de.pokemoncarddetector.data.db.SetWithProgress
 import de.pokemoncarddetector.data.db.ValueSnapshot
 import de.pokemoncarddetector.data.prices.PriceRefreshState
 import de.pokemoncarddetector.data.prices.PriceRepository
+import de.pokemoncarddetector.data.prices.centsFor
 import de.pokemoncarddetector.data.prices.collectionValue
 import de.pokemoncarddetector.data.prices.priceFor
 import de.pokemoncarddetector.ui.appViewModel
@@ -70,6 +71,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -95,7 +97,10 @@ data class StatsUiState(
     val byRarity: List<BarItem> = emptyList(),
     val wishCount: Int = 0,
     val wishCost: Double = 0.0,
+    /** aeltester Preis-Stand der Sammlung/Wunschliste */
     val lastFetch: Long? = null,
+    /** Karten ohne jeden Preis-Abruf */
+    val unfetched: Int = 0,
     val refresh: PriceRefreshState = PriceRefreshState.Idle,
     val settings: AppSettings = AppSettings(),
 )
@@ -114,7 +119,7 @@ private data class Inputs(
 class StatsViewModel(
     private val repository: CardRepository,
     private val prices: PriceRepository,
-    settingsRepo: SettingsRepository,
+    private val settingsRepo: SettingsRepository,
     db: AppDatabase,
 ) : ViewModel() {
 
@@ -151,11 +156,12 @@ class StatsViewModel(
         // Verlauf (Cent -> Euro) + Veraenderung ggue. ca. 7 Tagen
         // Heutiger Punkt = aktueller (Live-)Wert, damit der Verlauf zur grossen Zahl passt
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        val snapshots = i.history.filter { it.date != today }
-        val history = snapshots.map { ChartPoint(germanDate(it.date).take(6), it.valueCents / 100.0) } +
+        // Nur Tage, an denen der Wert fuer DIESE Preisart gespeichert wurde (sonst Spruenge beim Umschalten)
+        val snapshots = i.history.filter { it.date != today && it.centsFor(metric) != null }
+        val history = snapshots.map { ChartPoint(germanDate(it.date).take(6), it.centsFor(metric)!! / 100.0) } +
             ChartPoint("heute", value.totalEuro)
         val weekAgo = snapshots.lastOrNull { daysBetween(it.date, today) >= 7 } ?: snapshots.firstOrNull()
-        val delta = weekAgo?.let { value.totalEuro - it.valueCents / 100.0 }
+        val delta = weekAgo?.let { value.totalEuro - it.centsFor(metric)!! / 100.0 }
 
         // Top-Karten
         val topIds = value.perCard.entries.sortedByDescending { it.value }.take(10)
@@ -169,7 +175,10 @@ class StatsViewModel(
             .map { (serie, list) -> serie to list.sumOf { it.value } }
             .sortedByDescending { it.second }
             .take(8)
-            .map { (serie, v) -> BarItem(serieName[serie] ?: serie.removePrefix("ja:"), v, euroRounded(v)) }
+            .map { (serie, v) ->
+                val name = serieName[serie] ?: serie.removePrefix("ja:")
+                BarItem(if (serie.startsWith("ja:")) "$name (JP)" else name, v, euroSmart(v))
+            }
 
         // Exemplare je Variantenart
         val byVariant = i.rows.groupBy { variantGroup(it.variant) }
@@ -186,7 +195,8 @@ class StatsViewModel(
 
         // Wunschliste: noch fehlende Karten
         val missingWishes = i.wishCards.filter { !it.owned }
-        val wishCost = missingWishes.sumOf { priceFor(pricesByCard[it.card.id].orEmpty(), it.defaultVariant, metric) ?: 0.0 }
+        // "Variante egal": guenstigster Preis der Karte
+        val wishCost = missingWishes.sumOf { priceFor(pricesByCard[it.card.id].orEmpty(), Variants.UNKNOWN, metric) ?: 0.0 }
 
         StatsUiState(
             loading = false,
@@ -210,11 +220,21 @@ class StatsViewModel(
         )
     }
 
-    val state: StateFlow<StatsUiState> = combine(computed, prices.state, prices.observeLastFetch()) { s, r, last ->
-        s.copy(refresh = r, lastFetch = last)
+    val state: StateFlow<StatsUiState> = combine(
+        computed, prices.state, prices.observeOldestTrackedFetch(), prices.observeUnfetchedCount(),
+    ) { s, r, oldest, unfetched ->
+        s.copy(refresh = r, lastFetch = oldest, unfetched = unfetched)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState())
 
-    fun refresh() = viewModelScope.launch { runCatching { prices.refreshTracked(force = true) } }
+    init {
+        // Fehlende/alte Preise beim Oeffnen nachladen (nicht erzwungen, im App-Bereich)
+        viewModelScope.launch {
+            if (settingsRepo.settings.first().autoPrices) prices.refreshAllInBackground(force = false)
+        }
+    }
+
+    /** "Aktualisieren"-Knopf: alles neu laden, laeuft auch weiter, wenn der Bildschirm verlassen wird */
+    fun refresh() = prices.refreshAllInBackground(force = true)
 
     private fun variantGroup(key: String): String {
         if (key.isBlank()) return "Unbekannt"
@@ -293,7 +313,8 @@ fun StatsScreen(onOpenSet: (String) -> Unit) {
                 Text(
                     "Preise: Cardmarket (über TCGdex, täglich aktualisiert), ${state.settings.priceMetric.label}. " +
                         "Fehlt der Preis einer Variante, zählt der niedrigste Preis der Karte. " +
-                        (state.lastFetch?.let { "Zuletzt geladen: ${germanDateTime(it)}." } ?: "Noch keine Preise geladen."),
+                        (state.lastFetch?.let { "Ältester Preis-Stand: ${germanDateTime(it)}." } ?: "Noch keine Preise geladen.") +
+                        (if (state.unfetched > 0) " ${cards(state.unfetched)} warten noch auf einen Preis." else ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -303,17 +324,34 @@ fun StatsScreen(onOpenSet: (String) -> Unit) {
     openCard?.let { id -> CardSheet(cardId = id, onDismiss = { openCard = null }, onOpenSet = onOpenSet) }
 }
 
+private fun cards(n: Int) = if (n == 1) "1 Karte" else "$n Karten"
+
+/** Euro mit Cent bei kleinen Betraegen (0,40 €), ganze Euro ab 10 € */
+private fun euroSmart(v: Double) = if (v < 10.0) euro(v) else euroRounded(v)
+
+/** Einzeiliger Text, der sich verkleinert, bis er in die Breite passt (Geldbetraege nie abschneiden). */
+@Composable
+private fun FitText(text: String, maxSize: androidx.compose.ui.unit.TextUnit) {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val maxPx = constraints.maxWidth
+        var size = maxSize
+        val style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold)
+        while (size.value > 20f &&
+            measurer.measure(text, style.copy(fontSize = size), softWrap = false, maxLines = 1).size.width > maxPx
+        ) {
+            size = (size.value - 2f).sp
+        }
+        Text(text, style = style.copy(fontSize = size), maxLines = 1, softWrap = false)
+    }
+}
+
 @Composable
 private fun HeroCard(state: StatsUiState) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
             Text("Wert deiner Sammlung", style = MaterialTheme.typography.labelLarge)
-            Text(
-                if (state.loading) "…" else euro(state.totalValue),
-                fontSize = 48.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-            )
+            FitText(if (state.loading) "…" else euro(state.totalValue), maxSize = 48.sp)
             val d = state.delta
             if (d != null && state.deltaSince != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -327,7 +365,7 @@ private fun HeroCard(state: StatsUiState) {
             }
             if (state.unpricedCards > 0) {
                 Text(
-                    "${state.unpricedCards} Karten noch ohne Preis",
+                    "${cards(state.unpricedCards)} noch ohne Preis",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
@@ -345,7 +383,11 @@ private fun KpiRow(state: StatsUiState) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Kpi("${state.setsComplete} / ${state.setsStarted}", "Sets komplett / angefangen", Modifier.weight(1f))
-            Kpi(if (state.wishCount == 0) "–" else euroRounded(state.wishCost), "Wunschliste (${state.wishCount} fehlen)", Modifier.weight(1f))
+            Kpi(
+                if (state.wishCount == 0 || state.wishCost == 0.0) "–" else euroSmart(state.wishCost),
+                if (state.wishCount == 1) "Wunschliste (1 fehlt)" else "Wunschliste (${state.wishCount} fehlen)",
+                Modifier.weight(1f),
+            )
         }
     }
 }

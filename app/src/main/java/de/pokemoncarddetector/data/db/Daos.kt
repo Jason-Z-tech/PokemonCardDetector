@@ -33,7 +33,10 @@ interface CatalogDao {
     suspend fun upsertCards(cards: List<CardEntity>)
 
     /** Entfernt Karten, die es im Set nicht mehr gibt – aber nie Karten, die jemand besitzt. */
-    @Query("DELETE FROM cards WHERE setId = :setId AND id NOT IN (:keepIds) AND id NOT IN (SELECT cardId FROM collection)")
+    @Query(
+        "DELETE FROM cards WHERE setId = :setId AND id NOT IN (:keepIds) " +
+            "AND id NOT IN (SELECT cardId FROM collection) AND id NOT IN (SELECT cardId FROM wishlist)"
+    )
     suspend fun deleteCardsNotIn(setId: String, keepIds: List<String>)
 
     @Query("SELECT * FROM cards WHERE setId = :setId")
@@ -115,7 +118,7 @@ interface CatalogDao {
         WHERE (:query != '' AND c.searchKey LIKE '%' || :query || '%')
            OR (:numberKey != '' AND c.numberKey = :numberKey AND (:total = 0 OR s.officialCount = :total))
         ORDER BY s.releaseDate DESC, s.id, c.sortIndex
-        LIMIT 300
+        LIMIT 600
         """
     )
     fun searchCards(query: String, numberKey: String, total: Int): Flow<List<CardItem>>
@@ -182,6 +185,16 @@ abstract class CollectionDao {
         """
     )
     abstract fun observeTotals(): Flow<CollectionTotals>
+
+    /** Summen nur fuer internationale bzw. japanische Karten */
+    @Query(
+        """
+        SELECT COUNT(DISTINCT col.cardId) AS uniqueCards, COALESCE(SUM(col.quantity), 0) AS copies
+        FROM collection col JOIN cards k ON k.id = col.cardId
+        WHERE col.quantity > 0 AND (col.cardId LIKE 'ja:%') = :japanese
+        """
+    )
+    abstract fun observeTotals(japanese: Boolean): Flow<CollectionTotals>
 
     /**
      * Setzt die Anzahl einer Variante (0 = entfernen). Gibt die neue Anzahl zurueck.

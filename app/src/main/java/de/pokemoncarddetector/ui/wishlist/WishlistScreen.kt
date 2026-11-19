@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -74,8 +75,8 @@ data class WishlistUiState(
 
 class WishlistViewModel(
     private val repository: CardRepository,
-    prices: PriceRepository,
-    settingsRepo: SettingsRepository,
+    private val prices: PriceRepository,
+    private val settingsRepo: SettingsRepository,
 ) : ViewModel() {
     private val sort = MutableStateFlow(WishSort.PRICE)
 
@@ -90,7 +91,8 @@ class WishlistViewModel(
         val byCard = allPrices.groupBy { it.cardId }
         val rows = cards.map { item ->
             val v = wishVariant[item.card.id].orEmpty()
-            WishRow(item, v, priceFor(byCard[item.card.id].orEmpty(), v.ifBlank { item.defaultVariant }, settings.priceMetric))
+            // "Variante egal" -> guenstigster Preis der Karte
+            WishRow(item, v, priceFor(byCard[item.card.id].orEmpty(), v.ifBlank { Variants.UNKNOWN }, settings.priceMetric))
         }
         // "Erhalten" = gewuenschte Variante (oder bei "egal" irgendeine) ist in der Sammlung
         fun received(r: WishRow) = if (r.wishVariant.isBlank()) r.item.owned else (r.item.quantities[r.wishVariant] ?: 0) > 0
@@ -111,8 +113,10 @@ class WishlistViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WishlistUiState())
 
     init {
-        // Preise der Wunschliste beim Oeffnen auffrischen (nur veraltete)
-        viewModelScope.launch { runCatching { prices.refreshTracked() } }
+        // Nur die Wunschliste auffrischen (nur veraltete) – und nur, wenn automatische Preise an sind
+        viewModelScope.launch {
+            if (settingsRepo.settings.first().autoPrices) runCatching { prices.refreshWishlist() }
+        }
     }
 
     fun setSort(s: WishSort) { sort.value = s }
@@ -153,7 +157,10 @@ fun WishlistScreen(onOpenSet: (String) -> Unit) {
                         .padding(16.dp),
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("${state.missing.size} Karten fehlen noch", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (state.missing.size == 1) "1 Karte fehlt noch" else "${state.missing.size} Karten fehlen noch",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                         Text("ca. ${euro(state.totalMissing)}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Text(
                             "${state.settings.priceMetric.label} bei Cardmarket",

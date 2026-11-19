@@ -1,0 +1,33 @@
+{
+ "id": "swsh1-146",
+ "localId": "146",
+ "variants_detailed": [
+  {
+   "type": "normal",
+   "size": "standard"
+  },
+  {
+   "type": "reverse",
+   "size": "standard"
+  }
+ ],
+ "pricing": {
+  "cardmarket": {
+   "updated": "2026-11-18T22:16:18.980Z",
+   "unit": "EUR",
+   "idProduct": 436819,
+   "avg": 0.08,
+   "low": 0.02,
+   "trend": 0.06,
+   "avg1": 0.1,
+   "avg7": 0.06,
+   "avg30": 0.07,
+   "avg-holo": 0.29,
+   "low-holo": 0.09,
+   "trend-holo": 0.49,
+   "avg1-holo": 0.2,
+   "avg7-holo": 0.45,
+   "avg30-holo": 0.38
+  }
+ }
+}

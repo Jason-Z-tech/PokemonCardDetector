@@ -34,6 +34,9 @@ class CardRepository(private val db: AppDatabase) {
     private val collection = db.collectionDao()
     private val wishlist = db.wishlistDao()
 
+    /** Wird nach Aenderungen an der Sammlung aufgerufen (Karten-ID, null = vieles geaendert) – fuer Preise/Tageswert. */
+    @Volatile var onCollectionChanged: (String?) -> Unit = {}
+
     fun observeSets(japanese: Boolean): Flow<List<SetWithProgress>> = catalog.observeSetsWithProgress(japanese)
     fun observeWishlistCards(): Flow<List<CardItem>> = catalog.observeWishlistCards()
     fun observeWishes(): Flow<List<WishEntity>> = wishlist.observeAll()
@@ -42,6 +45,7 @@ class CardRepository(private val db: AppDatabase) {
     /** Karte auf die Wunschliste (variant "" = egal welche Variante) oder entfernen. */
     suspend fun setWished(cardId: String, wished: Boolean, variant: String = "") {
         if (wished) wishlist.upsert(WishEntity(cardId, variant, System.currentTimeMillis())) else wishlist.removeCard(cardId)
+        if (wished) onCollectionChanged(cardId)
     }
     fun observeSeries(): Flow<List<SerieEntity>> = catalog.observeSeries()
     fun observeSet(setId: String): Flow<SetEntity?> = catalog.observeSet(setId)
@@ -69,28 +73,42 @@ class CardRepository(private val db: AppDatabase) {
         if (ids.isEmpty()) emptyList() else catalog.cardsByIds(ids)
 
     /** Anzahl einer Variante setzen. */
-    suspend fun setQuantity(cardId: String, variant: String, quantity: Int): Int = collection.setQuantity(cardId, variant, quantity)
+    suspend fun setQuantity(cardId: String, variant: String, quantity: Int): Int =
+        collection.setQuantity(cardId, variant, quantity).also { onCollectionChanged(cardId) }
 
     /** Eine Variante +/-. Gibt die neue Anzahl dieser Variante zurueck. */
-    suspend fun add(cardId: String, variant: String, delta: Int = 1): Int = collection.add(cardId, variant, delta)
+    suspend fun add(cardId: String, variant: String, delta: Int = 1): Int =
+        collection.add(cardId, variant, delta).also { onCollectionChanged(cardId) }
 
     /** Karte komplett entfernen (alle Varianten). */
-    suspend fun removeCard(cardId: String) = collection.deleteCard(cardId)
+    suspend fun removeCard(cardId: String) {
+        collection.deleteCard(cardId)
+        onCollectionChanged(null)
+    }
+
+    fun observeTotals(japanese: Boolean): Flow<CollectionTotals> = collection.observeTotals(japanese)
 
     /** Aktueller Stand einer Karte (alle Varianten) – fuer "Rueckgaengig". */
     suspend fun snapshot(cardId: String): List<CollectionEntity> = collection.entriesOf(cardId)
 
-    suspend fun restore(cardId: String, entries: List<CollectionEntity>) = collection.restore(cardId, entries)
+    suspend fun restore(cardId: String, entries: List<CollectionEntity>) {
+        collection.restore(cardId, entries)
+        onCollectionChanged(null)
+    }
 
     // ---------- Index fuer die Erkennung ----------
 
     private val indexMutex = Mutex()
     @Volatile private var cachedIndex: CatalogIndex? = null
     @Volatile private var cachedIndexJa: CatalogIndex? = null
+    /** Zaehlt Katalog-Aenderungen: ein Index, der waehrend einer Aenderung gebaut wurde, wird nicht gemerkt. */
+    private val indexGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     /** Erkennungs-Index fuer internationale bzw. japanische Karten. */
     suspend fun catalogIndex(japanese: Boolean = false): CatalogIndex = indexMutex.withLock {
-        (if (japanese) cachedIndexJa else cachedIndex) ?: withContext(Dispatchers.Default) {
+        (if (japanese) cachedIndexJa else cachedIndex)?.let { return@withLock it }
+        val generation = indexGeneration.get()
+        val built = withContext(Dispatchers.Default) {
             val sets = catalog.allSets().filter { it.id.startsWith("ja:") == japanese }.map {
                 IndexSet(
                     id = it.id,
@@ -104,11 +122,16 @@ class CardRepository(private val db: AppDatabase) {
             }
             val cards = catalog.indexRows(japanese).map { IndexCard(it.id, it.setId, it.localId, it.name, it.nameEn, it.hp) }
             CatalogIndex(sets, cards)
-        }.also { if (japanese) cachedIndexJa = it else cachedIndex = it }
+        }
+        if (indexGeneration.get() == generation) {
+            if (japanese) cachedIndexJa = built else cachedIndex = built
+        }
+        built
     }
 
     /** Nach Katalog-Aenderungen aufrufen. */
     fun invalidateIndex() {
+        indexGeneration.incrementAndGet()
         cachedIndex = null
         cachedIndexJa = null
     }
@@ -150,6 +173,7 @@ class CardRepository(private val db: AppDatabase) {
             collection.upsertAll(entries)
             wishlist.upsertAll(wishes)
         }
+        onCollectionChanged(null)
         entries.size
     }
 }

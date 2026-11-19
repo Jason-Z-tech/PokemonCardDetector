@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SerieEntity::class, SetEntity::class, CardEntity::class, CollectionEntity::class,
         PriceEntity::class, WishEntity::class, ValueSnapshot::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -77,9 +77,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v5: Tageswert je Preisart (Trend / 30-Tage / Ab-Preis). Alte Werte waren Trendpreise. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE value_history ADD COLUMN trendCents INTEGER")
+                db.execSQL("ALTER TABLE value_history ADD COLUMN avg30Cents INTEGER")
+                db.execSQL("ALTER TABLE value_history ADD COLUMN lowCents INTEGER")
+                db.execSQL("UPDATE value_history SET trendCents = valueCents")
+                // 0-Euro-Eintraege (vor dem ersten Preis gespeichert) verfaelschen den Verlauf
+                db.execSQL("DELETE FROM value_history WHERE valueCents = 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "karten.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

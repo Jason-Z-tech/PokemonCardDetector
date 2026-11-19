@@ -21,6 +21,13 @@ enum class PriceMetric(val code: String, val label: String, val short: String) {
     }
 }
 
+/** Tageswert fuer die gewaehlte Preisart (null = an diesem Tag fuer diese Preisart nicht gespeichert). */
+fun de.pokemoncarddetector.data.db.ValueSnapshot.centsFor(metric: PriceMetric): Long? = when (metric) {
+    PriceMetric.TREND -> trendCents
+    PriceMetric.AVG30 -> avg30Cents
+    PriceMetric.LOW -> lowCents
+}
+
 fun PriceEntity.value(metric: PriceMetric): Double? = when (metric) {
     PriceMetric.TREND -> trend ?: avg30 ?: avg7
     PriceMetric.AVG30 -> avg30 ?: trend
@@ -46,21 +53,42 @@ object PriceParser {
         now: Long,
     ): List<PriceEntity> {
         val details = (json["variants_detailed"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        // Schluessel: aus den (englischen) Feldern, sonst ueber die Position im Katalog
+        val keys = details.mapIndexed { i, v -> if (canonicalKeys) variantKey(v) else catalogVariants.getOrNull(i) ?: variantKey(v) }
+        val top = (json["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject
+        // Haupt-Produkt der Karte: Normal (bzw. Holo bei Holo-Raren) – oder der Kartenpreis
+        val primary = if ("normal" in keys) "normal" else "holo"
+        val base = details.indices.firstNotNullOfOrNull { i -> details[i].cardmarket()?.takeIf { keys[i] == primary } } ?: top
+        val baseId = (base?.get("idProduct") as? JsonPrimitive)?.longOrNull
+
         val out = LinkedHashMap<String, PriceEntity>()
-        details.forEachIndexed { index, v ->
-            val cm = ((v["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject) ?: return@forEachIndexed
-            // Schluessel: aus den (englischen) Feldern, sonst ueber die Position im Katalog
-            val key = if (canonicalKeys) variantKey(v) else catalogVariants.getOrNull(index) ?: variantKey(v)
-            val reverse = key.startsWith("reverse")
-            out[key] = price(cardId, key, cm, reverse, now) ?: return@forEachIndexed
+        details.forEachIndexed { i, v ->
+            val key = keys[i]
+            val ownId = ((v["thirdParty"] as? JsonObject)?.get("cardmarket") as? JsonPrimitive)?.longOrNull
+            // Ohne eigene Preisangabe: nur das Haupt-Produkt und das einfache Reverse duerfen den Produktpreis erben
+            // (Reverse = Holo-Preis desselben Produkts). Sonder-Varianten (Stempel, Muster, Untertyp) nie.
+            val cm = v.cardmarket()
+                ?: base?.takeIf { (key == primary || key == "reverse") && (ownId == null || ownId == baseId) }
+                ?: return@forEachIndexed
+            price(cardId, key, cm, key.startsWith("reverse"), now)?.let { out[key] = it }
         }
+        // Varianten, die bei Cardmarket kein eigenes Produkt haben (z.B. 1. Edition: nur ein Merkmal des Angebots),
+        // bekommen keinen eigenen Preis – sonst stuende der Preis der Grundkarte als "ihr" Preis da.
+        val shared = out.keys.filter { key ->
+            val parts = key.split('|').toSet()
+            val id = out[key]?.idProduct ?: return@filter false
+            out.any { (other, p) -> other != key && p.idProduct == id && other.split('|').toSet().let { it.size < parts.size && parts.containsAll(it) } }
+        }
+        shared.forEach { out.remove(it) }
         // Karte ohne Varianten-Details: Preis der Karte als "ohne Variante"
-        if (out.isEmpty()) {
-            val cm = ((json["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject)
-            if (cm != null) price(cardId, Variants.UNKNOWN, cm, reverse = false, now)?.let { out[Variants.UNKNOWN] = it }
+        if (out.isEmpty() && top != null) {
+            price(cardId, Variants.UNKNOWN, top, reverse = false, now)?.let { out[Variants.UNKNOWN] = it }
         }
         return out.values.toList()
     }
+
+    private fun JsonObject.cardmarket(): JsonObject? =
+        ((this["pricing"] as? JsonObject)?.get("cardmarket") as? JsonObject)
 
     private fun price(cardId: String, variant: String, cm: JsonObject, reverse: Boolean, now: Long): PriceEntity? {
         fun d(k: String) = (cm[k] as? JsonPrimitive)?.doubleOrNull?.takeIf { it > 0.0 }

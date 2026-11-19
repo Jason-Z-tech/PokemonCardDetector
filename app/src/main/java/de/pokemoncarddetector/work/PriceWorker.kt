@@ -17,7 +17,9 @@ class PriceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         val app = applicationContext as PokeApp
         val result = runCatching { app.container.priceRepository.refreshTracked() }
-        return if (result.isSuccess && result.getOrNull()?.failed == 0) Result.success() else Result.retry()
+        val done = result.getOrNull() ?: return Result.retry()
+        // Nur bei Netzproblemen erneut versuchen – einzelne Karten ohne Preis sind kein Grund
+        return if (done.offline) Result.retry() else Result.success()
     }
 
     companion object {

@@ -216,7 +216,7 @@ fun SetDetailScreen(setId: String, onBack: () -> Unit) {
                     CardTile(item, state.settings.showImages, state.settings.imageLanguage, Modifier.fillMaxWidth())
                     if (state.settings.showImages) {
                         Text(
-                            "${item.displayLocalId} · ${item.card.name}",
+                            "${item.displayLocalId} · ${if (item.isJapanese) item.card.nameEn.ifBlank { item.card.name } else item.card.name}",
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

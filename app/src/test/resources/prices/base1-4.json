@@ -6,9 +6,12 @@
    "type": "holo",
    "subtype": "unlimited",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 273699
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.984Z",
      "unit": "EUR",
      "idProduct": 273699,
      "avg": 453.87,
@@ -33,9 +36,12 @@
    "stamp": [
     "1st-edition"
    ],
+   "thirdParty": {
+    "cardmarket": 660224
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.984Z",
      "unit": "EUR",
      "idProduct": 660224,
      "avg": 2887.65,
@@ -57,9 +63,12 @@
    "type": "holo",
    "subtype": "shadowless",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 660224
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.984Z",
      "unit": "EUR",
      "idProduct": 660224,
      "avg": 2887.65,
@@ -85,7 +94,7 @@
  ],
  "pricing": {
   "cardmarket": {
-   "updated": "2026-11-18T22:16:18.967Z",
+   "updated": "2026-11-18T22:16:18.984Z",
    "unit": "EUR",
    "idProduct": 273699,
    "avg": 453.87,

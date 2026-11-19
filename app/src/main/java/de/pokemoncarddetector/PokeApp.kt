@@ -32,15 +32,35 @@ class AppContainer(app: Application) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
-    val priceRepository = PriceRepository(database, httpClient, settings)
+    val priceRepository = PriceRepository(database, httpClient, settings, appScope, isOnline = { isOnline(app) })
+
+    init {
+        // Neue Karten bekommen sofort einen Preis, der Tageswert wird nachgezogen
+        repository.onCollectionChanged = { cardId -> priceRepository.onCollectionChanged(cardId) }
+    }
     private val catalogStore = CatalogStore(app, database)
     val catalogManager = CatalogManager(
         scope = appScope,
         store = catalogStore,
-        sync = CatalogSync(database, catalogStore, httpClient),
+        sync = CatalogSync(database, catalogStore, httpClient, germanSpecies = { loadGermanSpecies(app) }),
         settings = settings,
         repository = repository,
     )
+}
+
+/** assets/species_de.json: {"6": "Glurak", ...} (fehlt die Datei, gibt es keine Hinweise) */
+fun loadGermanSpecies(context: android.content.Context): Map<Int, String> = runCatching {
+    val text = context.assets.open("species_de.json").bufferedReader().use { it.readText() }
+    kotlinx.serialization.json.Json.parseToJsonElement(text).let { it as kotlinx.serialization.json.JsonObject }
+        .mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to (v as kotlinx.serialization.json.JsonPrimitive).content } }
+        .toMap()
+}.getOrDefault(emptyMap())
+
+/** Gibt es gerade ein Netzwerk mit Internet? (ohne Netz werden Preis-Abrufe gar nicht erst versucht) */
+fun isOnline(context: android.content.Context): Boolean {
+    val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return true
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+    return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
 class PokeApp : Application(), ImageLoaderFactory {

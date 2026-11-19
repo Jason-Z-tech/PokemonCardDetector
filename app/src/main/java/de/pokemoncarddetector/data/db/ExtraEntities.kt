@@ -45,12 +45,16 @@ data class WishEntity(
 data class ValueSnapshot(
     /** yyyy-MM-dd */
     @PrimaryKey val date: String,
-    /** Gesamtwert in Cent */
+    /** Gesamtwert in Cent (Trendpreis; aelteres Feld, bleibt fuer Kompatibilitaet) */
     val valueCents: Long,
     val uniqueCards: Int,
     val copies: Int,
     /** Karten mit bekanntem Preis */
     val pricedCards: Int,
+    /** Wert je Preisart in Cent – so bleibt der Verlauf beim Umschalten der Preisart stimmig (null = unbekannt) */
+    val trendCents: Long? = null,
+    val avg30Cents: Long? = null,
+    val lowCents: Long? = null,
 )
 
 /** Set/Serie/Seltenheit einer gesammelten Karte (fuer die Statistik). */
@@ -85,12 +89,53 @@ interface PriceDao {
     @Query("SELECT * FROM prices")
     suspend fun all(): List<PriceEntity>
 
-    /** Juengster Abruf je Karte (zum Entscheiden, ob neu geladen werden muss). */
+    /** Juengster Abruf je Karte (hoechstens ~900 IDs pro Aufruf – SQLite-Grenze auf Android 8-11). */
     @Query("SELECT cardId, MAX(fetchedAt) AS fetchedAt FROM prices WHERE cardId IN (:cardIds) GROUP BY cardId")
     suspend fun fetchTimes(cardIds: List<String>): List<FetchTime>
 
-    @Query("SELECT MAX(fetchedAt) FROM prices")
-    fun observeLastFetch(): Flow<Long?>
+    /** Sammlung + Wunschliste, deren Preis fehlt oder aelter als [cutoff] ist (ohne gebundene ID-Liste). */
+    @Query(
+        """
+        SELECT t.cardId FROM (SELECT cardId FROM collection WHERE quantity > 0 UNION SELECT cardId FROM wishlist) t
+        LEFT JOIN (SELECT cardId, MAX(fetchedAt) AS f FROM prices GROUP BY cardId) p ON p.cardId = t.cardId
+        WHERE :force OR p.f IS NULL OR p.f < :cutoff
+        """
+    )
+    suspend fun staleTrackedIds(cutoff: Long, force: Boolean): List<String>
+
+    /** Wunschlisten-Karten mit fehlendem/altem Preis */
+    @Query(
+        """
+        SELECT w.cardId FROM (SELECT DISTINCT cardId FROM wishlist) w
+        LEFT JOIN (SELECT cardId, MAX(fetchedAt) AS f FROM prices GROUP BY cardId) p ON p.cardId = w.cardId
+        WHERE p.f IS NULL OR p.f < :cutoff
+        """
+    )
+    suspend fun staleWishIds(cutoff: Long): List<String>
+
+    /**
+     * Aeltester Preis-Stand der Sammlung + Wunschliste (null = noch keiner). Ehrlicher als der neueste Abruf:
+     * zeigt, wie aktuell die Werte insgesamt sind.
+     */
+    @Query(
+        """
+        SELECT MIN(f) FROM (
+            SELECT MAX(fetchedAt) AS f FROM prices
+            WHERE cardId IN (SELECT cardId FROM collection WHERE quantity > 0 UNION SELECT cardId FROM wishlist)
+            GROUP BY cardId
+        )
+        """
+    )
+    fun observeOldestTrackedFetch(): Flow<Long?>
+
+    /** Wie viele Karten der Sammlung/Wunschliste noch gar keinen Preis-Abruf hatten */
+    @Query(
+        """
+        SELECT COUNT(*) FROM (SELECT cardId FROM collection WHERE quantity > 0 UNION SELECT cardId FROM wishlist) t
+        WHERE t.cardId NOT IN (SELECT cardId FROM prices)
+        """
+    )
+    fun observeUnfetchedCount(): Flow<Int>
 }
 
 data class FetchTime(val cardId: String, val fetchedAt: Long)

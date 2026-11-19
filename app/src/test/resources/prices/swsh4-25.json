@@ -5,6 +5,9 @@
   {
    "type": "normal",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 511545
+   },
    "pricing": {
     "cardmarket": {
      "updated": "2026-11-18T22:16:18.980Z",
@@ -29,6 +32,9 @@
    "type": "holo",
    "size": "standard",
    "foil": "cracked-ice",
+   "thirdParty": {
+    "cardmarket": 547881
+   },
    "pricing": {
     "cardmarket": {
      "updated": "2026-11-18T22:16:18.980Z",
@@ -52,6 +58,9 @@
   {
    "type": "reverse",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 511545
+   },
    "pricing": {
     "cardmarket": {
      "updated": "2026-11-18T22:16:18.980Z",

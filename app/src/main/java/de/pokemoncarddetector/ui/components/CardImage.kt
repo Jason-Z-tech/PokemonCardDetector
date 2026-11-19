@@ -143,7 +143,7 @@ private fun TextTile(item: CardItem, dim: Boolean, shape: RoundedCornerShape) {
                 ) {
                     Text(item.numberLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, maxLines = 1)
                     Text(
-                        item.card.name,
+                        item.displayName.ifBlank { "Nr. ${item.displayLocalId}" },
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         maxLines = 4,

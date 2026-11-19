@@ -97,11 +97,12 @@ private object Routes {
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
 private val tabs = listOf(
-    Tab(Routes.SCAN, "Scannen", Icons.Default.CameraAlt),
-    Tab(Routes.LIBRARY_GRAPH, "Sammlung", Icons.Default.CollectionsBookmark),
+    // Kurze Beschriftungen: 5 Tabs passen sonst auf 360-dp-Handys nicht
+    Tab(Routes.SCAN, "Scan", Icons.Default.CameraAlt),
+    Tab(Routes.LIBRARY_GRAPH, "Karten", Icons.Default.CollectionsBookmark),
     Tab(Routes.SEARCH_BASE, "Suche", Icons.Default.Search),
     Tab(Routes.WISHLIST, "Wünsche", Icons.Default.Favorite),
-    Tab(Routes.STATS, "Statistik", Icons.Default.Insights),
+    Tab(Routes.STATS, "Werte", Icons.Default.Insights),
 )
 
 @Composable
@@ -120,7 +121,7 @@ private fun MainScaffold() {
                         selected = selected,
                         onClick = { nav.switchTab(tab.route) },
                         icon = { Icon(tab.icon, contentDescription = null) },
-                        label = { Text(tab.label, maxLines = 1, softWrap = false) },
+                        label = { Text(tab.label, maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                     )
                 }
             }

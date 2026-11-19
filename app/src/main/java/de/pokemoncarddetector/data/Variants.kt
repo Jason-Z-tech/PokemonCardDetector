@@ -73,8 +73,17 @@ object Variants {
     /** Liste aus dem Katalog-Feld ("a;b;c"). */
     fun list(joined: String): List<String> = if (joined.isBlank()) emptyList() else joined.split(';')
 
-    /** Standard-Variante beim Hinzufuegen: die erste (haeufigste) laut Katalog. */
-    fun default(variants: List<String>): String = variants.firstOrNull() ?: UNKNOWN
+    /**
+     * Standard-Variante beim Hinzufuegen: Normal, sonst Holo, sonst die erste ohne Stempel/Muster,
+     * sonst die erste laut Katalog. (TCGdex listet bei manchen Sets "Reverse" vor "Normal".)
+     */
+    fun default(variants: List<String>): String =
+        variants.firstOrNull { it == "normal" }
+            ?: variants.firstOrNull { it == "holo" }
+            ?: variants.firstOrNull { !it.contains('|') && it != "reverse" }
+            ?: variants.firstOrNull { !it.contains('|') }
+            ?: variants.firstOrNull()
+            ?: UNKNOWN
 
     private fun pretty(s: String) = s.split('-', '_').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 

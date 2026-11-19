@@ -5,9 +5,12 @@
   {
    "type": "holo",
    "size": "standard",
+   "thirdParty": {
+    "cardmarket": 719448
+   },
    "pricing": {
     "cardmarket": {
-     "updated": "2026-11-18T22:16:18.967Z",
+     "updated": "2026-11-18T22:16:18.974Z",
      "unit": "EUR",
      "idProduct": 719448,
      "avg": 2.2,
@@ -28,7 +31,7 @@
  ],
  "pricing": {
   "cardmarket": {
-   "updated": "2026-11-18T22:16:18.967Z",
+   "updated": "2026-11-18T22:16:18.974Z",
    "unit": "EUR",
    "idProduct": 719448,
    "avg": 2.2,

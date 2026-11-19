@@ -1,0 +1,80 @@
+{
+ "id": "neo1-1",
+ "localId": "1",
+ "variants_detailed": [
+  {
+   "type": "holo",
+   "size": "standard",
+   "thirdParty": {
+    "cardmarket": 274401
+   },
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.980Z",
+     "unit": "EUR",
+     "idProduct": 274401,
+     "avg": 45.95,
+     "low": 3.39,
+     "trend": 22.89,
+     "avg1": 34,
+     "avg7": 28.9,
+     "avg30": 43.59,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 11.37,
+     "avg1-holo": 7.57,
+     "avg7-holo": 7.43,
+     "avg30-holo": 9.64
+    }
+   }
+  },
+  {
+   "type": "holo",
+   "size": "standard",
+   "stamp": [
+    "1st-edition"
+   ],
+   "thirdParty": {
+    "cardmarket": 274401
+   },
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.980Z",
+     "unit": "EUR",
+     "idProduct": 274401,
+     "avg": 45.95,
+     "low": 3.39,
+     "trend": 22.89,
+     "avg1": 34,
+     "avg7": 28.9,
+     "avg30": 43.59,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 11.37,
+     "avg1-holo": 7.57,
+     "avg7-holo": 7.43,
+     "avg30-holo": 9.64
+    }
+   }
+  }
+ ],
+ "pricing": {
+  "cardmarket": {
+   "updated": "2026-11-18T22:16:18.980Z",
+   "unit": "EUR",
+   "idProduct": 274401,
+   "avg": 45.95,
+   "low": 3.39,
+   "trend": 22.89,
+   "avg1": 34,
+   "avg7": 28.9,
+   "avg30": 43.59,
+   "avg-holo": null,
+   "low-holo": null,
+   "trend-holo": 11.37,
+   "avg1-holo": 7.57,
+   "avg7-holo": 7.43,
+   "avg30-holo": 9.64
+  }
+ }
+}
