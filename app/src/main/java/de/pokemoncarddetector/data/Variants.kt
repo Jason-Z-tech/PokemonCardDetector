@@ -74,12 +74,15 @@ object Variants {
     fun list(joined: String): List<String> = if (joined.isBlank()) emptyList() else joined.split(';')
 
     /**
-     * Standard-Variante beim Hinzufuegen: Normal, sonst Holo, sonst die erste ohne Stempel/Muster,
-     * sonst die erste laut Katalog. (TCGdex listet bei manchen Sets "Reverse" vor "Normal".)
+     * Standard-Variante beim Hinzufuegen: die erste von Normal/Holo in Katalog-Reihenfolge, sonst die erste
+     * einfache Variante ausser Reverse, sonst die erste ohne Stempel/Muster, sonst die erste laut Katalog.
+     *
+     * Reverse wird uebersprungen, weil TCGdex es bei manchen Sets vor "Normal" listet (sv01, lc, ...).
+     * Zwischen Normal und Holo zaehlt die Reihenfolge von TCGdex: bei Holo-Raren steht der Booster-Druck
+     * (Holo) vorne, ein spaeter gelistetes "Normal" ist ein eigenes Cardmarket-Produkt (Deck/Promo).
      */
     fun default(variants: List<String>): String =
-        variants.firstOrNull { it == "normal" }
-            ?: variants.firstOrNull { it == "holo" }
+        variants.firstOrNull { it == "normal" || it == "holo" }
             ?: variants.firstOrNull { !it.contains('|') && it != "reverse" }
             ?: variants.firstOrNull { !it.contains('|') }
             ?: variants.firstOrNull()
