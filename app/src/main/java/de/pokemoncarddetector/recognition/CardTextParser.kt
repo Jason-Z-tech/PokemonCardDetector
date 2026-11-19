@@ -42,27 +42,32 @@ data class ParsedCardText(
 
 object CardTextParser {
 
-    private const val CONFUSABLE_DIGITS = "0-9OQDIL|"
+    private const val CONFUSABLE_DIGITS = "0-9OQDILSZ|"
+    /** In der Gesamtzahl gibt es keine Buchstaben-Suffixe, dort ist auch B (=8) ein Verwechsler. */
+    private const val CONFUSABLE_TOTAL = "0-9OQDILSZB|"
 
     /**
      * Nummer/Gesamtzahl, optional mit Buchstaben-Praefix (TG, GG, SV, RC, H ...).
      * Erlaubt Leerzeichen um den Schraegstrich und typische OCR-Verwechsler (O statt 0, I/l statt 1).
      */
     private val SLASH_NUMBER = Regex(
-        "(?<![A-Z0-9])([A-Z]{1,4})?\\s?([$CONFUSABLE_DIGITS]{1,3}[A-Z]?)\\s?[/⁄∕]\\s?([A-Z]{1,4})?\\s?([$CONFUSABLE_DIGITS]{1,3})(?![0-9])"
+        "(?<![A-Z0-9])([A-Z]{1,4})?\\s?([$CONFUSABLE_DIGITS]{1,3}[A-Z]?)\\s?[/⁄∕]\\s?([A-Z]{1,4})?\\s?([$CONFUSABLE_TOTAL]{1,3})(?![0-9])"
     )
 
     /** Promos ohne Gesamtzahl: SWSH050, SM210, XY123, BW95, DP45, HGSS18 */
     private val PROMO_NUMBER = Regex("(?<![A-Z0-9/])(SWSH|HGSS|SM|XY|BW|DP)\\s?([0-9]{1,3})(?![0-9/])")
 
     /** Set-Kuerzel vor Sprachcode, z.B. "PAL DE 123/193", "SVI EN", "MEG DE". */
-    private val CODE_BEFORE_LANG = Regex("(?<![A-Z0-9])([A-Z][A-Z0-9]{1,3})\\s?[•·.]?\\s?(DE|EN|FR|IT|ES|PT|NL)(?![A-Z])")
+    private val CODE_BEFORE_LANG = Regex("(?<![\\p{L}0-9])([A-Z][A-Z0-9]{1,3})\\s?[•·.]?\\s?(DE|EN|FR|IT|ES|PT|NL)(?=\\s?[0-9OQ]?[0-9])")
 
     /** Set-Kuerzel direkt vor der Nummer, z.B. "PAF 045/091". */
-    private val CODE_BEFORE_NUMBER = Regex("(?<![A-Z0-9])([A-Z][A-Z0-9]{1,3})\\s+(?:[A-Z]{2}\\s+)?[0-9]{1,3}\\s?/")
+    private val CODE_BEFORE_NUMBER = Regex("(?<![\\p{L}0-9])([A-Z][A-Z0-9]{1,3})\\s+(?:[A-Z]{2}\\s+)?[0-9]{1,3}\\s?/")
 
     /** Notfall-Muster ohne Praefix-Logik, falls OCR Leerzeichen verschluckt ("SVIDE025/198"). */
     private val PLAIN_SLASH_NUMBER = Regex("([0-9]{2,3})\\s?/\\s?([0-9]{2,3})(?![0-9])")
+
+    /** Schraegstrich nicht erkannt: "025I185", "025|185", "025 185" (nur 3+3 Ziffern, sonst zu unsicher). */
+    private val MISSING_SLASH = Regex("(?<![0-9])([0-9]{3})(?:\\s?[IL|\\\\]\\s?|\\s)([0-9]{3})(?![0-9])")
 
     /** Tokens, die wie Set-Kuerzel aussehen, aber auf jeder Karte stehen (Kraftpunkte). */
     private val NOT_A_SET_CODE = setOf("HP", "KP", "PV", "PS", "LV", "DE", "EN")
@@ -77,6 +82,7 @@ object CardTextParser {
     private val COPYRIGHT_HINT = Regex("©|\\(C\\)|NINTENDO|POK[EÉ]MON|CREATURES|GAME ?FREAK|WIZARDS", RegexOption.IGNORE_CASE)
 
     private val LETTER = Regex("\\p{L}")
+    private val EVOLVES_FROM = Regex("^\\s*(entwickelt sich aus|evolves from)\\b", RegexOption.IGNORE_CASE)
     private val DIGIT = Regex("[0-9]")
 
     /** Woerter, die oft gross auf Karten stehen, aber keine Namen sind. */
@@ -100,6 +106,9 @@ object CardTextParser {
             when (c) {
                 'O', 'Q', 'D' -> '0'
                 'I', 'L', '|' -> '1'
+                'S' -> '5'
+                'Z' -> '2'
+                'B' -> '8'
                 else -> c
             }
         )
@@ -129,12 +138,17 @@ object CardTextParser {
                 if (isConfusablePrefix(prefix) && prefix.length + num.length <= 3) {
                     num = prefix + num; prefix = ""
                 }
+                if (totalPrefix.isNotEmpty() && prefix.length > totalPrefix.length && prefix.startsWith(totalPrefix) &&
+                    isConfusablePrefix(prefix.substring(totalPrefix.length))
+                ) {
+                    num = prefix.substring(totalPrefix.length) + num; prefix = totalPrefix
+                }
                 if (isConfusablePrefix(totalPrefix) && totalPrefix.length + total.length <= 3) {
                     total = totalPrefix + total; totalPrefix = ""
                 }
                 // Mindestens eine echte Ziffer auf beiden Seiten, sonst ist es vermutlich Text.
                 if (!DIGIT.containsMatchIn(num) || !DIGIT.containsMatchIn(total)) continue
-                val suffix = num.takeLastWhile { it.isLetter() && it !in "OQDIL" }
+                val suffix = num.takeLastWhile { it.isLetter() && it !in "OQDILSZ" }
                 val numDigits = toDigits(num.dropLast(suffix.length))
                 val totalDigits = toDigits(total)
                 if (!numDigits.all { it.isDigit() } || !totalDigits.all { it.isDigit() }) continue
@@ -171,6 +185,16 @@ object CardTextParser {
         if (numbers.values.none { it.total != null }) {
             for (raw in texts) {
                 for (m in PLAIN_SLASH_NUMBER.findAll(raw.uppercase())) {
+                    val total = m.groupValues[2].toInt()
+                    if (total <= 0 || total > 500) continue
+                    val key = "${m.groupValues[1]}/$total"
+                    if (key !in numbers) numbers[key] = CollectorNumber(m.groupValues[1], total, m.value.trim())
+                }
+            }
+        }
+        if (numbers.values.none { it.total != null }) {
+            for (raw in texts) {
+                for (m in MISSING_SLASH.findAll(raw.uppercase())) {
                     val total = m.groupValues[2].toInt()
                     if (total <= 0 || total > 500) continue
                     val key = "${m.groupValues[1]}/$total"
@@ -221,6 +245,8 @@ object CardTextParser {
             val digits = DIGIT.findAll(text).count()
             val norm = TextNorm.normalize(text)
             if (norm.length < 3 || norm in NON_NAME_WORDS) return@mapIndexedNotNull null
+            // "Entwickelt sich aus Glutexo" / "Evolves from Charmeleon" nennt die VORSTUFE, nicht diese Karte
+            if (EVOLVES_FROM.containsMatchIn(text)) return@mapIndexedNotNull null
             if (letters.toDouble() / (letters + digits) < 0.5) return@mapIndexedNotNull null
             val score = if (hasBoxes) {
                 val relTop = (line.top - minTop).toDouble() / span

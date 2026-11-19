@@ -10,6 +10,8 @@ class ScanStabilizer(
     private val required: Int = 2,
 ) {
     private val history = ArrayDeque<String?>()
+    /** Je Bild: war ueberhaupt eine Karte/Text zu sehen? (unabhaengig davon, ob sicher erkannt) */
+    private val seen = ArrayDeque<Boolean>()
     private val lastResults = HashMap<String, MatchResult>()
 
     /** Liefert ein stabiles Ergebnis oder null, solange noch nicht sicher. */
@@ -17,6 +19,8 @@ class ScanStabilizer(
         val id = result.best?.card?.id?.takeIf { result.confident }
         history.addLast(id)
         while (history.size > window) history.removeFirst()
+        seen.addLast(result.best != null)
+        while (seen.size > window) seen.removeFirst()
         if (id != null) lastResults[id] = result
         if (lastResults.size > 20) lastResults.keys.retainAll(history.filterNotNull().toSet())
 
@@ -26,10 +30,11 @@ class ScanStabilizer(
     }
 
     /** true, wenn in den letzten Bildern gar kein Text/keine Karte mehr zu sehen war. */
-    fun isIdle(): Boolean = history.size >= window && history.all { it == null }
+    fun isIdle(): Boolean = seen.size >= window && seen.none { it }
 
     fun reset() {
         history.clear()
+        seen.clear()
         lastResults.clear()
     }
 }

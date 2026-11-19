@@ -23,15 +23,30 @@ data class IndexCard(
     val key: String = CardTextParser.normalizeLocalId(localId)
     val nameNorm: String = TextNorm.normalize(name)
     val nameEnNorm: String = TextNorm.normalize(nameEn)
+    /** Name ohne Logo-Zusatz (V, VMAX, VSTAR, ex, GX ...): diese Logos sind Grafiken, OCR liest sie oft nicht. */
+    val baseNorm: String = TextNorm.normalize(name.replace(SUFFIX, ""))
+    val baseEnNorm: String = TextNorm.normalize(nameEn.replace(SUFFIX, ""))
+    private companion object {
+        val SUFFIX = Regex("[\\s-]+(VMAX|VSTAR|V-UNION|V|GX|EX|BREAK|LV\\.X|LEGENDE|LEGEND)$", RegexOption.IGNORE_CASE)
+    }
     /** Buchstaben-Praefix der Nummer, z.B. "TG" bei "TG05". */
     val prefix: String = key.takeWhile { it.isLetter() }
+    /** Gedruckte Nummer, falls sie von der Katalog-Nummer abweicht (Nachdrucke, siehe [PrintedAliases]). */
+    val alias: PrintedAliases.Alias? = PrintedAliases.of(id)
+    val aliasNameNorm: String = alias?.let { TextNorm.normalize(it.nameDe) }.orEmpty()
 }
 
 /** Alle Karten im Speicher, nach Nummer/Name/Set indiziert. Einmal bauen, oft benutzen. */
 class CatalogIndex(sets: List<IndexSet>, cards: List<IndexCard>) {
     val setsById: Map<String, IndexSet> = sets.associateBy { it.id }
     val cardsById: Map<String, IndexCard> = cards.associateBy { it.id }
-    val cardsByKey: Map<String, List<IndexCard>> = cards.groupBy { it.key }
+    val cardsByKey: Map<String, List<IndexCard>> = buildMap<String, MutableList<IndexCard>> {
+        for (c in cards) {
+            getOrPut(c.key) { mutableListOf() }.add(c)
+            // Nachdrucke zusaetzlich unter ihrer gedruckten Nummer finden
+            c.alias?.let { getOrPut(it.key) { mutableListOf() }.add(c) }
+        }
+    }
     val cardsBySet: Map<String, List<IndexCard>> = cards.groupBy { it.setId }
     val setsByAbbreviation: Map<String, List<IndexSet>> = sets
         .filter { it.abbreviation.isNotBlank() }
@@ -157,13 +172,15 @@ class CardMatcher(private val index: CatalogIndex) {
             .flatMap { total -> index.setsById.values.filter { it.officialCount == total } }
             .map { it.id }
         val fallbackSets = (setsFromTotals + codeSetIds).toSet()
-        if (fallbackSets.isNotEmpty() && (candidates.values.maxOfOrNull { it.nameScore } ?: 0.0) < 0.8) {
+        val bestNumberName = candidates.values.maxOfOrNull { it.nameScore } ?: 0.0
+        if (fallbackSets.isNotEmpty()) {
             for (setId in fallbackSets) {
                 val set = index.setsById[setId] ?: continue
                 for (card in index.cardsBySet[setId].orEmpty()) {
                     if (card.id in candidates) continue
                     val ns = nameScore(parsed, card)
-                    if (ns < 0.8) continue
+                    // Nur Karten, deren Name klar besser passt als der des Nummern-Treffers (Nummer evtl. falsch gelesen)
+                    if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
                     val totalMatched = parsed.numbers.any { it.total != null && totalMatches(set, card, it.total) }
                     offer(score(card, set, parsed, ns, numberMatched = false, totalMatched, set.id in codeSetIds))
                 }
@@ -190,11 +207,12 @@ class CardMatcher(private val index: CatalogIndex) {
         )
         val best = sorted.first()
         val second = sorted.getOrNull(1)
-        val confident = isConfident(best, second, sorted)
+        val confident = isConfident(best, second, sorted, parsed)
         return MatchResult(best, sorted.drop(1).take(MAX_ALTERNATIVES), confident, parsed)
     }
 
     private fun totalMatches(set: IndexSet, card: IndexCard, total: Int): Boolean {
+        if (card.alias != null) return card.alias.total == total
         if (set.officialCount == total) return true
         // Unter-Sets mit eigener Zaehlung: TG05/TG30, GG12/GG70, SV050/SV122, RC5/RC32
         if (card.prefix.isNotEmpty() && index.prefixCount(set.id, card.prefix) == total) return true
@@ -204,10 +222,11 @@ class CardMatcher(private val index: CatalogIndex) {
     private fun nameScore(parsed: ParsedCardText, card: IndexCard): Double {
         var best = 0.0
         for (line in parsed.nameLines) {
-            val s = maxOf(
-                TextNorm.nameSimilarity(line, card.nameNorm),
-                TextNorm.nameSimilarity(line, card.nameEnNorm),
-            )
+            var s = TextNorm.nameSimilarity(line, card.nameNorm)
+            if (card.nameEnNorm != card.nameNorm) s = maxOf(s, TextNorm.nameSimilarity(line, card.nameEnNorm))
+            if (card.baseNorm != card.nameNorm) s = maxOf(s, 0.9 * TextNorm.nameSimilarity(line, card.baseNorm))
+            if (card.baseEnNorm != card.nameEnNorm) s = maxOf(s, 0.9 * TextNorm.nameSimilarity(line, card.baseEnNorm))
+            if (card.aliasNameNorm.isNotEmpty()) s = maxOf(s, TextNorm.nameSimilarity(line, card.aliasNameNorm))
             if (s > best) best = s
             if (best >= 1.0) break
         }
@@ -231,6 +250,8 @@ class CardMatcher(private val index: CatalogIndex) {
         s += W_NAME * ((nameScore - 0.5).coerceAtLeast(0.0) / 0.5)
         val hp = parsed.hp
         if (hp != null && card.hp > 0) s += if (hp == card.hp) W_HP else -W_HP / 2
+        // Nachdruck mit Original-Nummer: ohne lesbares Jahr das Original bevorzugen (Nachdruck bleibt Alternative)
+        if (card.alias != null && parsed.maxYear == null) s -= 3.0
         val year = parsed.maxYear
         val release = set.releaseYear
         if (year != null && release != null) {
@@ -257,7 +278,13 @@ class CardMatcher(private val index: CatalogIndex) {
             .map { it.key to index.cardsByName[it.key].orEmpty() }
     }
 
-    private fun isConfident(best: MatchCandidate, second: MatchCandidate?, all: List<MatchCandidate>): Boolean {
+    private fun isConfident(best: MatchCandidate, second: MatchCandidate?, all: List<MatchCandidate>, parsed: ParsedCardText): Boolean {
+        // Eine andere Karte passt per Name klar besser -> Nummer vermutlich falsch gelesen
+        if (all.any { !it.numberMatched && it.nameScore >= 0.8 && it.nameScore > best.nameScore + 0.02 }) return false
+        // Copyright-Jahr deutlich nach Erscheinen des Sets -> Nachdruck (z.B. Celebrations Classic Collection)
+        val year = parsed.maxYear
+        val release = best.set.releaseYear
+        if (!best.codeMatched && best.card.prefix.isEmpty() && year != null && release != null && year > release + 1) return false
         val strongName = best.nameScore >= 0.8
         val clearLead = second == null || best.score - second.score >= 12.0
         return when {
@@ -266,7 +293,7 @@ class CardMatcher(private val index: CatalogIndex) {
             // Nummer + gedrucktes Set-Kuerzel (Karmesin & Purpur / Mega-Entwicklung)
             best.numberMatched && best.codeMatched && (best.totalMatched || strongName) -> clearLead
             // Nummer + Gesamtzahl eindeutig (nur ein Set passt), Name unlesbar
-            best.numberMatched && best.totalMatched && all.count { it.numberMatched && it.totalMatched } == 1 -> best.nameScore >= 0.5 || second == null
+            best.numberMatched && best.totalMatched && all.count { it.numberMatched && it.totalMatched } == 1 -> best.nameScore >= 0.5
             else -> false
         }
     }

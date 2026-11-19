@@ -79,7 +79,8 @@ class CardMatcherTest {
     fun nummerOhneNameReichtBeiEindeutigerGesamtzahl() {
         // 185 gibt es nur bei Farbenschock
         val r = matcher.match(lines("unleserlich" to 40, "025/185" to 12))
-        assertMatch("swsh4-25", r)
+        // Ohne jede Namensbestaetigung bester Treffer, aber nicht "sicher" (sonst Auto-Add bei Fehllesung)
+        assertMatch("swsh4-25", r, confident = false)
     }
 
     @Test
@@ -111,7 +112,11 @@ class CardMatcherTest {
     fun englischeKarteWirdAuchErkannt() {
         val c = card("base1-4")
         val r = matcher.match(lines(c.nameEn to 48, "4/102" to 12))
-        assertMatch("base1-4", r)
+        // Ohne Copyright-Jahr gleich wahrscheinlich: Grundset oder Celebrations-Nachdruck -> Auswahl anbieten
+        assertMatch("base1-4", r, confident = false)
+        assertTrue(r.alternatives.any { it.card.id == "cel25cc-CC002" })
+        val r2 = matcher.match(lines(c.nameEn to 48, "4/102" to 12, "©1999 Wizards" to 10))
+        assertMatch("base1-4", r2)
     }
 
     @Test

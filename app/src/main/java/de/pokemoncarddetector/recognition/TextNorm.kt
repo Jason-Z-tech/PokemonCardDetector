@@ -50,18 +50,22 @@ object TextNorm {
     fun partialRatio(needle: String, hay: String): Double {
         if (needle.isEmpty() || hay.isEmpty()) return 0.0
         if (hay.length <= needle.length) return ratio(needle, hay)
-        var best = 0.0
+        // Sellers-Algorithmus: kleinste Editierdistanz von [needle] zu irgendeinem Teilstring von [hay], O(n*m)
         val n = needle.length
-        for (len in maxOf(1, n - 1)..minOf(hay.length, n + 1)) {
-            for (start in 0..hay.length - len) {
-                val r = ratio(needle, hay.substring(start, start + len))
-                if (r > best) {
-                    best = r
-                    if (best == 1.0) return best
-                }
+        var prev = IntArray(n + 1) { it }
+        var cur = IntArray(n + 1)
+        var best = n
+        for (j in 1..hay.length) {
+            cur[0] = 0
+            val ch = hay[j - 1]
+            for (i in 1..n) {
+                val cost = if (needle[i - 1] == ch) 0 else 1
+                cur[i] = minOf(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + cost)
             }
+            if (cur[n] < best) { best = cur[n]; if (best == 0) return 1.0 }
+            val t = prev; prev = cur; cur = t
         }
-        return best
+        return 1.0 - best.toDouble() / n
     }
 
     /**
@@ -77,7 +81,8 @@ object TextNorm {
         }
         // Sehr kurze Zeilen nicht gegen lange Namen "hochrechnen"
         if (lineNorm.length < 3) return 0.0
-        val full = ratio(lineNorm, nameNorm)
+        // Ab doppelter Laenge kann die Gesamt-Aehnlichkeit 0.5 nicht mehr erreichen -> teure Levenshtein sparen
+        val full = if (lineNorm.length <= 2 * nameNorm.length) ratio(lineNorm, nameNorm) else 0.0
         val partial = if (lineNorm.length > nameNorm.length) partialRatio(nameNorm, lineNorm) * 0.95 else 0.0
         return maxOf(full, partial)
     }
