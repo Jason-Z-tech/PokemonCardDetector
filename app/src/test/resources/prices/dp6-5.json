@@ -1,0 +1,37 @@
+{
+ "id": "dp6-5",
+ "localId": "5",
+ "variants_detailed": [
+  {
+   "type": "holo",
+   "size": "standard"
+  },
+  {
+   "type": "reverse",
+   "size": "standard"
+  },
+  {
+   "type": "normal",
+   "size": "standard"
+  }
+ ],
+ "pricing": {
+  "cardmarket": {
+   "updated": "2026-11-18T22:16:18.978Z",
+   "unit": "EUR",
+   "idProduct": 278154,
+   "avg": 2.09,
+   "low": 0.15,
+   "trend": 1.28,
+   "avg1": 1.56,
+   "avg7": 1.21,
+   "avg30": 2.19,
+   "avg-holo": 3.13,
+   "low-holo": 1.49,
+   "trend-holo": 3.47,
+   "avg1-holo": 1,
+   "avg7-holo": 3.17,
+   "avg30-holo": 2.98
+  }
+ }
+}

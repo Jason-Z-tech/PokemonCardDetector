@@ -236,8 +236,11 @@ class StatsViewModel(
         }
     }
 
-    /** "Aktualisieren"-Knopf: alles neu laden, laeuft auch weiter, wenn der Bildschirm verlassen wird */
-    fun refresh() = prices.refreshAllInBackground(force = true)
+    /**
+     * "Aktualisieren"-Knopf: Preise nachladen, die aelter als eine Stunde sind (TCGdex aktualisiert nur einmal am Tag,
+     * alles neu zu laden waeren bei grossen Sammlungen tausende Abrufe). Laeuft weiter, wenn der Bildschirm verlassen wird.
+     */
+    fun refresh() = prices.refreshAllInBackground(force = false, maxAgeMs = PriceRepository.ONE_HOUR)
 
     private fun variantGroup(key: String): String {
         if (key.isBlank()) return "Unbekannt"

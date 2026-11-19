@@ -1,0 +1,109 @@
+{
+ "id": "base5-8",
+ "localId": "8",
+ "variants_detailed": [
+  {
+   "type": "holo",
+   "size": "standard",
+   "thirdParty": {
+    "cardmarket": 274061
+   },
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.978Z",
+     "unit": "EUR",
+     "idProduct": 274061,
+     "avg": 175.88,
+     "low": 6.99,
+     "trend": 101.47,
+     "avg1": 13.78,
+     "avg7": 134.05,
+     "avg30": 158.8,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 31.28,
+     "avg1-holo": 24.75,
+     "avg7-holo": 25.65,
+     "avg30-holo": 25.61
+    }
+   }
+  },
+  {
+   "type": "holo",
+   "size": "standard",
+   "stamp": [
+    "1st-edition"
+   ],
+   "thirdParty": {
+    "cardmarket": 274061
+   },
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.978Z",
+     "unit": "EUR",
+     "idProduct": 274061,
+     "avg": 175.88,
+     "low": 6.99,
+     "trend": 101.47,
+     "avg1": 13.78,
+     "avg7": 134.05,
+     "avg30": 158.8,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 31.28,
+     "avg1-holo": 24.75,
+     "avg7-holo": 25.65,
+     "avg30-holo": 25.61
+    }
+   }
+  },
+  {
+   "type": "holo",
+   "size": "standard",
+   "stamp": [
+    "pre-release"
+   ],
+   "thirdParty": {
+    "cardmarket": 275574
+   },
+   "pricing": {
+    "cardmarket": {
+     "updated": "2026-11-18T22:16:18.978Z",
+     "unit": "EUR",
+     "idProduct": 275574,
+     "avg": 46.13,
+     "low": 16,
+     "trend": 63.86,
+     "avg1": 39,
+     "avg7": 45.37,
+     "avg30": 54.81,
+     "avg-holo": null,
+     "low-holo": null,
+     "trend-holo": 24.82,
+     "avg1-holo": 22.45,
+     "avg7-holo": 24.97,
+     "avg30-holo": 23.89
+    }
+   }
+  }
+ ],
+ "pricing": {
+  "cardmarket": {
+   "updated": "2026-11-18T22:16:18.978Z",
+   "unit": "EUR",
+   "idProduct": 274061,
+   "avg": 175.88,
+   "low": 6.99,
+   "trend": 101.47,
+   "avg1": 13.78,
+   "avg7": 134.05,
+   "avg30": 158.8,
+   "avg-holo": null,
+   "low-holo": null,
+   "trend-holo": 31.28,
+   "avg1-holo": 24.75,
+   "avg7-holo": 25.65,
+   "avg30-holo": 25.61
+  }
+ }
+}

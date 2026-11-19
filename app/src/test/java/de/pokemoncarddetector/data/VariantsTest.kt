@@ -22,6 +22,23 @@ class VariantsTest {
     }
 
     @Test
+    fun standardVarianteNimmtErstesNormalOderHolo() {
+        // Reverse vorne (sv01, lc): Normal bzw. Holo dahinter
+        assertEquals("normal", Variants.default(listOf("reverse", "normal")))
+        assertEquals("holo", Variants.default(listOf("reverse", "holo")))
+        // Holo-Rare mit spaeter gelistetem "Normal" (eigenes Produkt, z.B. me01-010, sv10-020): Holo bleibt
+        assertEquals("holo", Variants.default(listOf("holo", "reverse", "normal")))
+        assertEquals("holo", Variants.default(listOf("reverse", "holo", "normal")))
+        assertEquals("holo", Variants.default(listOf("holo", "reverse", "holo|foil=cosmos", "normal")))
+        assertEquals("normal", Variants.default(listOf("normal", "holo")))
+        assertEquals("normal", Variants.default(listOf("normal", "reverse", "reverse|foil=pokeball")))
+        // Ohne Normal/Holo: erste einfache Variante, sonst erste ohne Zusatz, sonst die erste
+        assertEquals("reverse", Variants.default(listOf("reverse|foil=pokeball", "reverse")))
+        assertEquals("holo|sub=unlimited", Variants.default(listOf("holo|sub=unlimited", "holo|sub=shadowless")))
+        assertEquals(Variants.UNKNOWN, Variants.default(emptyList()))
+    }
+
+    @Test
     fun anzahlenJeVariante() {
         val item = CardItem(
             card = CardEntity("sv08.5-001", "sv08.5", "001", "Owei", "Exeggcute", 7, 0, "owei", "1",

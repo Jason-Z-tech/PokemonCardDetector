@@ -46,7 +46,7 @@ import de.pokemoncarddetector.data.SettingsRepository
 import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
 import de.pokemoncarddetector.data.prices.PriceRepository
-import de.pokemoncarddetector.data.prices.priceFor
+import de.pokemoncarddetector.data.prices.variantPrice
 import de.pokemoncarddetector.ui.appViewModel
 import de.pokemoncarddetector.ui.card.CardSheet
 import de.pokemoncarddetector.ui.components.CardTile
@@ -62,7 +62,8 @@ import kotlinx.coroutines.launch
 
 enum class WishSort(val label: String) { PRICE("Preis"), SET("Set"), NAME("Name") }
 
-data class WishRow(val item: CardItem, val wishVariant: String, val price: Double?)
+/** [exactPrice] = eigener Preis der gewuenschten Variante (sonst Untergrenze: gemeinsames Produkt bzw. guenstigste Variante) */
+data class WishRow(val item: CardItem, val wishVariant: String, val price: Double?, val exactPrice: Boolean = false)
 
 data class WishlistUiState(
     val missing: List<WishRow> = emptyList(),
@@ -94,7 +95,8 @@ class WishlistViewModel(
         val rows = cards.map { item ->
             val v = wishVariant[item.card.id].orEmpty()
             // "Variante egal" -> guenstigster Preis der Karte
-            WishRow(item, v, priceFor(byCard[item.card.id].orEmpty(), v.ifBlank { Variants.UNKNOWN }, settings.priceMetric))
+            val p = variantPrice(byCard[item.card.id].orEmpty(), v.ifBlank { Variants.UNKNOWN }, settings.priceMetric)
+            WishRow(item, v, p?.euro, exactPrice = p?.exact == true)
         }
         // "Erhalten" = gewuenschte Variante (oder bei "egal" irgendeine) ist in der Sammlung
         fun received(r: WishRow) = if (r.wishVariant.isBlank()) r.item.owned else (r.item.quantities[r.wishVariant] ?: 0) > 0
@@ -235,7 +237,9 @@ private fun WishItem(row: WishRow, settings: AppSettings, received: Boolean, onO
             Column {
                 Text("${item.setName} · Nr. ${item.numberLabel}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    (if (row.wishVariant.isBlank()) "Variante egal" else Variants.label(row.wishVariant)) + " · " + euro(row.price),
+                    (if (row.wishVariant.isBlank()) "Variante egal" else Variants.label(row.wishVariant)) + " · " +
+                        // Gewuenschte Variante ohne eigenen Preis: nur Untergrenze (wie in den Kartendetails)
+                        (if (row.wishVariant.isNotBlank() && row.price != null && !row.exactPrice) "ab " else "") + euro(row.price),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (received) {

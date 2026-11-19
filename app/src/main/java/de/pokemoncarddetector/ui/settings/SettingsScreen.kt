@@ -46,6 +46,7 @@ import de.pokemoncarddetector.data.ImageLanguage
 import de.pokemoncarddetector.data.SyncState
 import de.pokemoncarddetector.data.prices.PriceMetric
 import de.pokemoncarddetector.data.prices.PriceRefreshState
+import de.pokemoncarddetector.data.prices.PriceRepository
 import de.pokemoncarddetector.ui.components.germanDateTime
 import de.pokemoncarddetector.work.PriceWorker
 import kotlinx.coroutines.Dispatchers
@@ -164,6 +165,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                             is PriceRefreshState.Done -> Text(
                                 when {
                                     ps.offline -> "Keine Internetverbindung – Preise bleiben auf dem letzten Stand"
+                                    // Nichts aelter als eine Stunde: kein Abruf noetig
+                                    ps.updated == 0 && ps.failed == 0 -> "Alle Preise sind aktuell"
                                     else -> (if (ps.updated == 1) "1 Karte aktualisiert" else "${ps.updated} Karten aktualisiert") +
                                         if (ps.failed > 0) ", ${ps.failed} fehlgeschlagen" else ""
                                 },
@@ -175,7 +178,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 },
                 trailingContent = {
                     TextButton(
-                        onClick = { container.priceRepository.refreshAllInBackground(force = true) },
+                        // Nur Preise aelter als eine Stunde (wie der Knopf in der Statistik)
+                        onClick = { container.priceRepository.refreshAllInBackground(force = false, maxAgeMs = PriceRepository.ONE_HOUR) },
                         enabled = priceState !is PriceRefreshState.Running,
                     ) { Text("Laden") }
                 },
