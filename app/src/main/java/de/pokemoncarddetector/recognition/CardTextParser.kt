@@ -82,7 +82,7 @@ object CardTextParser {
     private val COPYRIGHT_HINT = Regex("©|\\(C\\)|NINTENDO|POK[EÉ]MON|CREATURES|GAME ?FREAK|WIZARDS", RegexOption.IGNORE_CASE)
 
     private val LETTER = Regex("\\p{L}")
-    private val EVOLVES_FROM = Regex("^\\s*(entwickelt sich aus|evolves from)\\b", RegexOption.IGNORE_CASE)
+    private val EVOLVES_FROM = Regex("^\\s*(entwickelt sich aus|entsteht aus|evolves from|put .* on the basic)\\b", RegexOption.IGNORE_CASE)
     private val DIGIT = Regex("[0-9]")
 
     /** Woerter, die oft gross auf Karten stehen, aber keine Namen sind. */
