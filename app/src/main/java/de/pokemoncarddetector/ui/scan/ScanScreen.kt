@@ -136,6 +136,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.foundation.layout.BoxWithConstraints
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.Variants
@@ -421,6 +422,7 @@ internal fun ScanLayout(
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var slot by remember { mutableStateOf<Rect?>(null) }
     var bottomBarHeight by remember { mutableIntStateOf(0) }
+    var topBarHeight by remember { mutableIntStateOf(0) }
     val frame = slot?.let { with(density) { fitCardFrame(it, marginX = 20.dp.toPx(), marginY = 8.dp.toPx()) } }
     val currentOnFrame by rememberUpdatedState(onFrame)
     LaunchedEffect(frame, rootSize) {
@@ -444,6 +446,7 @@ internal fun ScanLayout(
                 onToggleAutoAdd = onToggleAutoAdd,
                 onToggleJapanese = onToggleJapanese,
                 modifier = Modifier
+                    .onSizeChanged { topBarHeight = it.height }
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -480,7 +483,10 @@ internal fun ScanLayout(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = with(density) { (if (hasPermission) bottomBarHeight else 0).toDp() })
+                .padding(
+                    top = with(density) { topBarHeight.toDp() },
+                    bottom = with(density) { (if (hasPermission) bottomBarHeight else 0).toDp() },
+                )
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             content = overlay,
@@ -715,7 +721,7 @@ private fun ShutterButton(busy: Boolean, enabled: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun DetectionCard(
+internal fun DetectionCard(
     detection: Detection,
     settings: AppSettings,
     onAdd: () -> Unit,
@@ -731,70 +737,94 @@ private fun DetectionCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(12.dp)) {
-            if (!detection.confident) {
-                Text(
-                    "Nicht ganz sicher – stimmt diese Karte?",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 6.dp),
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CardTile(
-                    item = item,
-                    showImage = settings.showImages,
-                    language = settings.imageLanguage,
-                    dimIfMissing = false,
-                    showQuantityBadge = false,
-                    modifier = Modifier
-                        .width(72.dp)
-                        .clickable(onClick = onOpen),
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(item.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${item.setName} · Nr. ${item.numberLabel}", style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+            // Bei wenig Platz (kleines Handy, grosse Schrift) scrollt der obere Teil – die Knoepfe bleiben immer ganz sichtbar
+            Column(
+                Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                if (!detection.confident) {
                     Text(
-                        if (item.quantity > 0) "Du hast: ${item.quantity}×" else "Neu für deine Sammlung!",
+                        "Nicht ganz sicher – stimmt diese Karte?",
                         style = MaterialTheme.typography.labelLarge,
-                        color = if (item.quantity > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 6.dp),
                     )
                 }
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Verwerfen") }
-            }
-            if (item.variantList.size > 1) {
-                // Holo/Reverse sieht die Kamera nicht -> Variante hier waehlen
-                VariantPicker(
-                    variants = item.variantList,
-                    selected = detection.variant,
-                    quantities = item.quantities,
-                    onSelect = onSelectVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CardTile(
+                        item = item,
+                        showImage = settings.showImages,
+                        language = settings.imageLanguage,
+                        dimIfMissing = false,
+                        showQuantityBadge = false,
+                        modifier = Modifier
+                            .width(72.dp)
+                            .clickable(onClick = onOpen),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("${item.setName} · Nr. ${item.numberLabel}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (item.quantity > 0) "Du hast: ${item.quantity}×" else "Neu für deine Sammlung!",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (item.quantity > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Verwerfen") }
+                }
+                if (item.variantList.size > 1) {
+                    // Holo/Reverse sieht die Kamera nicht -> Variante hier waehlen
+                    VariantPicker(
+                        variants = item.variantList,
+                        selected = detection.variant,
+                        quantities = item.quantities,
+                        onSelect = onSelectVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onAdd, modifier = Modifier.weight(1f)) {
+            val add: @Composable (Modifier) -> Unit = { m ->
+                Button(onClick = onAdd, modifier = m) {
                     Icon(Icons.Default.Add, null)
                     Spacer(Modifier.width(4.dp))
                     Text("Hinzufügen")
                 }
+            }
+            val other: @Composable (Modifier) -> Unit = { m ->
                 if (detection.alternatives.isNotEmpty()) {
-                    OutlinedButton(onClick = onAlternatives) { Text("Andere (${detection.alternatives.size})") }
+                    OutlinedButton(onClick = onAlternatives, modifier = m) { Text("Andere (${detection.alternatives.size})") }
                 } else {
-                    OutlinedButton(onClick = onSearch) {
+                    OutlinedButton(onClick = onSearch, modifier = m) {
                         Icon(Icons.Default.Search, null)
                         Spacer(Modifier.width(4.dp))
                         Text("Suchen")
                     }
                 }
             }
+            if (LocalDensity.current.fontScale >= 1.5f) {
+                // Sehr grosse Schrift: Knoepfe untereinander, damit "Hinzufügen" nicht mitten im Wort umbricht
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    add(Modifier.fillMaxWidth())
+                    other(Modifier.fillMaxWidth())
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    add(Modifier.weight(1f))
+                    other(Modifier)
+                }
+            }
         }
     }
 }
 
-/** Variantenwahl: bis vier Varianten als Chips (brechen um), mehr als Auswahlliste – nichts wird abgeschnitten. */
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * Variantenwahl in genau einer Zeile: passen alle Varianten als Chips nebeneinander, werden sie gezeigt;
+ * sonst ein Knopf "Variante: … ▾" mit der ganzen Liste. So wird nichts abgeschnitten und die Ergebnis-Karte
+ * bleibt niedrig (die Knoepfe darunter bleiben sichtbar).
+ */
 @Composable
 internal fun VariantPicker(
     variants: List<String>,
@@ -804,34 +834,48 @@ internal fun VariantPicker(
     modifier: Modifier = Modifier,
 ) {
     fun owned(v: String) = (quantities[v] ?: 0).let { if (it > 0) " ($it)" else "" }
-    if (variants.size <= 4) {
-        FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    var open by remember { mutableStateOf(false) }
+    SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->
+        val gap = 6.dp.roundToPx()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val chips = subcompose("chips") {
             variants.forEach { v ->
                 FilterChip(
                     selected = selected == v,
                     onClick = { onSelect(v) },
-                    label = { Text(Variants.shortLabel(v) + owned(v)) },
+                    label = { Text(Variants.shortLabel(v) + owned(v), maxLines = 1) },
                 )
             }
-        }
-    } else {
-        var open by remember { mutableStateOf(false) }
-        Box(modifier) {
-            OutlinedButton(onClick = { open = true }) {
-                Text("Variante: " + Variants.shortLabel(selected) + owned(selected), modifier = Modifier.weight(1f, fill = false))
-                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+        }.map { it.measure(loose.copy(maxWidth = Constraints.Infinity)) }
+        val total = chips.sumOf { it.width } + gap * (chips.size - 1).coerceAtLeast(0)
+        if (total <= constraints.maxWidth) {
+            val h = chips.maxOf { it.height }
+            layout(constraints.maxWidth, h) {
+                var x = 0
+                chips.forEach { c -> c.placeRelative(x, (h - c.height) / 2); x += c.width + gap }
             }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                variants.forEach { v ->
-                    DropdownMenuItem(
-                        text = { Text(Variants.label(v) + owned(v)) },
-                        onClick = { onSelect(v); open = false },
-                        leadingIcon = {
-                            if (v == selected) Icon(Icons.Default.Check, contentDescription = "ausgewählt") else Spacer(Modifier.size(24.dp))
-                        },
-                    )
+        } else {
+            val menu = subcompose("menu") {
+                Box {
+                    OutlinedButton(onClick = { open = true }) {
+                        Text("Variante: " + Variants.shortLabel(selected) + owned(selected), modifier = Modifier.weight(1f, fill = false))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        variants.forEach { v ->
+                            DropdownMenuItem(
+                                text = { Text(Variants.label(v) + owned(v)) },
+                                onClick = { onSelect(v); open = false },
+                                leadingIcon = {
+                                    if (v == selected) Icon(Icons.Default.Check, contentDescription = "ausgewählt") else Spacer(Modifier.size(24.dp))
+                                },
+                            )
+                        }
+                    }
                 }
-            }
+            }.map { it.measure(loose) }
+            val h = menu.maxOf { it.height }
+            layout(constraints.maxWidth, h) { menu.forEach { it.placeRelative(0, 0) } }
         }
     }
 }

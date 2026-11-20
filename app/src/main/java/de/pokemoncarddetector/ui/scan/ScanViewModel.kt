@@ -52,10 +52,11 @@ object ScanTexts {
     const val IDLE = "Halte eine Karte in den Rahmen"
     const val IDLE_JA = "Japanische Karte in den Rahmen halten"
     const val HOLD_STILL = "Ruhig halten – Nummer unten zeigen"
-    fun numberRead(raw: String) = "Nummer gelesen: $raw – suche Karte …"
+    const val NUMBER_READ = "Nummer erkannt – suche Karte …"
+    const val FOUND = "Karte erkannt"
 
-    /** Laengste moegliche Live-Hinweise (Nummer als laengere Promo-Form) */
-    val LIVE = listOf(IDLE, IDLE_JA, HOLD_STILL, numberRead("TG15/TG30"))
+    /** Alle Live-Hinweise – feste Texte, damit die Statuszeile (und der Rahmen darueber) beim Scannen nie springt */
+    val LIVE = listOf(IDLE, IDLE_JA, HOLD_STILL, NUMBER_READ, FOUND)
 }
 
 data class ScanUiState(
@@ -170,8 +171,8 @@ class ScanViewModel(
         val p = result.parsed
         return when {
             p.isEmpty -> idleStatus()
-            result.confident && result.best != null -> "Erkannt: ${result.best.card.name.ifBlank { "Nr. " + result.best.card.localId }}"
-            p.numbers.isNotEmpty() -> ScanTexts.numberRead(p.numbers.first().raw)
+            result.confident && result.best != null -> ScanTexts.FOUND
+            p.numbers.isNotEmpty() -> ScanTexts.NUMBER_READ
             else -> ScanTexts.HOLD_STILL
         }
     }
