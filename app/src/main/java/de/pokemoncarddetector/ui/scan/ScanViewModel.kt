@@ -47,10 +47,21 @@ data class Detection(
     val variant: String = best.defaultVariant,
 )
 
+/** Hinweise der Statuszeile. Die Live-Hinweise wechseln beim Scannen staendig; fuer sie plant die Oberflaeche fest Platz ein. */
+object ScanTexts {
+    const val IDLE = "Halte eine Karte in den Rahmen"
+    const val IDLE_JA = "Japanische Karte in den Rahmen halten"
+    const val HOLD_STILL = "Ruhig halten – Nummer unten zeigen"
+    fun numberRead(raw: String) = "Nummer gelesen: $raw – suche Karte …"
+
+    /** Laengste moegliche Live-Hinweise (Nummer als laengere Promo-Form) */
+    val LIVE = listOf(IDLE, IDLE_JA, HOLD_STILL, numberRead("TG15/TG30"))
+}
+
 data class ScanUiState(
     val detection: Detection? = null,
-    /** kurze Statuszeile, z.B. "Nummer erkannt: 025/185" */
-    val status: String = "Halte eine Karte in den Rahmen",
+    /** kurze Statuszeile, z.B. "Nummer gelesen: 025/185 – suche Karte …" */
+    val status: String = ScanTexts.IDLE,
     val busy: Boolean = false,
     val paused: Boolean = false,
 )
@@ -153,13 +164,15 @@ class ScanViewModel(
         }
     }
 
+    private fun idleStatus() = if (settings.value.scanJapanese) ScanTexts.IDLE_JA else ScanTexts.IDLE
+
     private fun statusFor(result: MatchResult): String {
         val p = result.parsed
         return when {
-            p.isEmpty -> "Halte eine Karte in den Rahmen"
+            p.isEmpty -> idleStatus()
             result.confident && result.best != null -> "Erkannt: ${result.best.card.name.ifBlank { "Nr. " + result.best.card.localId }}"
-            p.numbers.isNotEmpty() -> "Nummer gelesen: ${p.numbers.first().raw} – suche Karte …"
-            else -> "Karte ruhig halten – die Nummer unten muss lesbar sein"
+            p.numbers.isNotEmpty() -> ScanTexts.numberRead(p.numbers.first().raw)
+            else -> ScanTexts.HOLD_STILL
         }
     }
 
@@ -184,7 +197,7 @@ class ScanViewModel(
     }
 
     fun onCaptureFailed(message: String) {
-        _state.update { it.copy(busy = false, status = "Halte eine Karte in den Rahmen") }
+        _state.update { it.copy(busy = false, status = idleStatus()) }
         viewModelScope.launch { _events.send(ScanEvent.Message(message)) }
     }
 
@@ -301,7 +314,7 @@ class ScanViewModel(
         stabilizer.reset()
         lastTentativeId = null
         userChoice = null
-        _state.update { it.copy(detection = null, status = "Halte eine Karte in den Rahmen") }
+        _state.update { it.copy(detection = null, status = idleStatus()) }
     }
 
     fun setPaused(paused: Boolean) {
@@ -317,7 +330,7 @@ class ScanViewModel(
     fun setJapanese(on: Boolean) {
         recognizer.japanese = on
         stabilizer.reset()
-        _state.update { it.copy(detection = null, status = if (on) "Japanische Karte in den Rahmen halten" else "Halte eine Karte in den Rahmen") }
+        _state.update { it.copy(detection = null, status = if (on) ScanTexts.IDLE_JA else ScanTexts.IDLE) }
         viewModelScope.launch { settingsRepo.setScanJapanese(on) }
     }
 

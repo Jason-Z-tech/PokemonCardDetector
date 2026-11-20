@@ -124,14 +124,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.foundation.layout.BoxWithConstraints
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
@@ -419,9 +424,10 @@ internal fun ScanLayout(
     val frame = slot?.let { with(density) { fitCardFrame(it, marginX = 20.dp.toPx(), marginY = 8.dp.toPx()) } }
     val currentOnFrame by rememberUpdatedState(onFrame)
     LaunchedEffect(frame, rootSize) {
-        if (frame != null && rootSize != IntSize.Zero) {
-            currentOnFrame(FrameGeometry(rootSize.width, rootSize.height, frame.left, frame.top, frame.right, frame.bottom))
-        }
+        if (rootSize == IntSize.Zero) return@LaunchedEffect
+        // Kein Platz fuer einen Rahmen (winziges Fenster): ganze Vorschau – nie die Geometrie eines alten Layouts
+        val f = frame ?: Rect(0f, 0f, rootSize.width.toFloat(), rootSize.height.toFloat())
+        currentOnFrame(FrameGeometry(rootSize.width, rootSize.height, f.left, f.top, f.right, f.bottom))
     }
 
     Box(
@@ -440,7 +446,7 @@ internal fun ScanLayout(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             )
             if (hasPermission) {
                 // Freier Platz fuer den Rahmen (die Spalte beginnt bei 0,0 der Flaeche)
@@ -450,7 +456,7 @@ internal fun ScanLayout(
                         .fillMaxWidth()
                         .onGloballyPositioned { slot = it.boundsInParent() },
                 )
-                StatusLine(status = status, visible = showStatus, detected = detected)
+                StatusLine(status = status, visible = showStatus)
                 ScanBottomBar(
                     busy = busy,
                     shutterEnabled = shutterEnabled,
@@ -540,8 +546,8 @@ private fun ScanToggles(
     // Bricht bei wenig Platz / grosser Schrift um, statt abgeschnitten zu werden
     FlowRow(
         modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         ScanToggle("Auto-Hinzufügen", autoAdd, if (autoAdd) Icons.Default.Check else Icons.Default.AutoMode, onToggleAutoAdd)
         ScanToggle("Japanisch", japanese, if (japanese) Icons.Default.Check else Icons.Default.Translate, onToggleJapanese)
@@ -562,28 +568,33 @@ private fun ScanToggle(label: String, checked: Boolean, icon: ImageVector, onTog
         Row(
             Modifier
                 .heightIn(min = 40.dp)
-                .padding(start = 10.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 8.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 2)
         }
     }
 }
 
 @Composable
-private fun StatusLine(status: String, visible: Boolean, detected: Boolean) {
+private fun StatusLine(status: String, visible: Boolean) {
     val style = MaterialTheme.typography.titleSmall
-    // Bei sehr grosser Schrift drei Zeilen, damit auch laengere Hinweise nicht abgeschnitten werden
-    val lines = if (LocalDensity.current.fontScale >= 1.5f) 3 else 2
-    Box(
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 2.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        // Platz fuer alle Zeilen fest einplanen: der Rahmen springt nicht, wenn der Text wechselt
+        // So viele Zeilen, wie der laengste Live-Hinweis bei dieser Breite und Schriftgroesse braucht, sind fest
+        // eingeplant: der Rahmen springt beim Scannen nicht. Seltene laengere Texte (Fehler) vergroessern das Feld.
+        val density = LocalDensity.current
+        val textWidth = with(density) { (maxWidth - 32.dp).roundToPx() }.coerceAtLeast(1)
+        val lines = remember(textWidth, style, measurer) {
+            ScanTexts.LIVE.maxOf { measurer.measure(it, style, constraints = Constraints(maxWidth = textWidth)).lineCount }
+        }
         Text(
             "",
             style = style,
@@ -595,19 +606,16 @@ private fun StatusLine(status: String, visible: Boolean, detected: Boolean) {
         )
         if (visible) {
             Surface(
-                color = if (detected) Color(0xFF2E7D32) else Color.Black.copy(alpha = 0.72f),
+                color = Color.Black.copy(alpha = 0.72f),
                 contentColor = Color.White,
                 shape = RoundedCornerShape(20.dp),
             ) {
+                // Keine Live-Region: der Hinweis wechselt mit jedem Kamerabild, TalkBack wuerde ununterbrochen vorlesen
                 Text(
                     status,
                     style = style,
                     textAlign = TextAlign.Center,
-                    maxLines = lines,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                        .semantics { liveRegion = LiveRegionMode.Polite },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
         }
@@ -756,22 +764,13 @@ private fun DetectionCard(
             }
             if (item.variantList.size > 1) {
                 // Holo/Reverse sieht die Kamera nicht -> Variante hier waehlen
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    item.variantList.forEach { v ->
-                        val have = item.quantities[v] ?: 0
-                        FilterChip(
-                            selected = detection.variant == v,
-                            onClick = { onSelectVariant(v) },
-                            label = { Text(Variants.shortLabel(v) + if (have > 0) " ($have)" else "", maxLines = 1) },
-                        )
-                    }
-                }
+                VariantPicker(
+                    variants = item.variantList,
+                    selected = detection.variant,
+                    quantities = item.quantities,
+                    onSelect = onSelectVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -788,6 +787,49 @@ private fun DetectionCard(
                         Spacer(Modifier.width(4.dp))
                         Text("Suchen")
                     }
+                }
+            }
+        }
+    }
+}
+
+/** Variantenwahl: bis vier Varianten als Chips (brechen um), mehr als Auswahlliste – nichts wird abgeschnitten. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun VariantPicker(
+    variants: List<String>,
+    selected: String,
+    quantities: Map<String, Int>,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    fun owned(v: String) = (quantities[v] ?: 0).let { if (it > 0) " ($it)" else "" }
+    if (variants.size <= 4) {
+        FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            variants.forEach { v ->
+                FilterChip(
+                    selected = selected == v,
+                    onClick = { onSelect(v) },
+                    label = { Text(Variants.shortLabel(v) + owned(v)) },
+                )
+            }
+        }
+    } else {
+        var open by remember { mutableStateOf(false) }
+        Box(modifier) {
+            OutlinedButton(onClick = { open = true }) {
+                Text("Variante: " + Variants.shortLabel(selected) + owned(selected), modifier = Modifier.weight(1f, fill = false))
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                variants.forEach { v ->
+                    DropdownMenuItem(
+                        text = { Text(Variants.label(v) + owned(v)) },
+                        onClick = { onSelect(v); open = false },
+                        leadingIcon = {
+                            if (v == selected) Icon(Icons.Default.Check, contentDescription = "ausgewählt") else Spacer(Modifier.size(24.dp))
+                        },
+                    )
                 }
             }
         }
@@ -841,36 +883,38 @@ private fun CandidateRow(item: CardItem, settings: AppSettings, isBest: Boolean,
 }
 
 @Composable
-private fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit, onGallery: () -> Unit) =
+internal fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit, onGallery: () -> Unit) =
     CompositionLocalProvider(LocalContentColor provides Color.White) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Icon(Icons.Default.CameraAlt, null, Modifier.size(64.dp))
-            Spacer(Modifier.height(16.dp))
-            Text(
+        // Zentriert, solange alles passt; sonst scrollbar (kleines Handy, grosse Schrift) – die Knoepfe bleiben erreichbar
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 32.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(Icons.Default.CameraAlt, null, Modifier.size(if (LocalDensity.current.fontScale >= 1.5f) 40.dp else 64.dp))
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    if (permanentlyDenied) {
+                        "Der Kamerazugriff wurde abgelehnt. Erlaube ihn in den App-Einstellungen unter „Berechtigungen“, um Karten zu scannen."
+                    } else {
+                        "Zum Scannen braucht die App Zugriff auf die Kamera. Die Bilder werden nur auf deinem Handy ausgewertet."
+                    },
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
                 if (permanentlyDenied) {
-                    "Der Kamerazugriff wurde abgelehnt. Erlaube ihn in den App-Einstellungen unter „Berechtigungen“, um Karten zu scannen."
+                    Button(onClick = onOpenSettings) { Text("Einstellungen öffnen", textAlign = TextAlign.Center) }
                 } else {
-                    "Zum Scannen braucht die App Zugriff auf die Kamera. Die Bilder werden nur auf deinem Handy ausgewertet."
-                },
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(16.dp))
-            if (permanentlyDenied) {
-                Button(onClick = onOpenSettings) { Text("Einstellungen öffnen") }
-            } else {
-                Button(onClick = onRequest) { Text("Kamera erlauben") }
-            }
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onGallery) {
-                Icon(Icons.Default.PhotoLibrary, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Foto aus der Galerie", color = Color.White)
+                    Button(onClick = onRequest) { Text("Kamera erlauben", textAlign = TextAlign.Center) }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onGallery) {
+                    Icon(Icons.Default.PhotoLibrary, null, tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Foto aus der Galerie", color = Color.White, textAlign = TextAlign.Center)
+                }
             }
         }
     }
