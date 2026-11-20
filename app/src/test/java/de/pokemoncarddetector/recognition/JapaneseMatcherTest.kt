@@ -205,4 +205,293 @@ class JapaneseMatcherTest {
         val u = matcher.match(lines("ブラッキーVMAX" to 48, "s6a E 048/069 RRR" to 12))
         assertEquals(u.show(), "ja:S6a-048", u.best?.card?.id)
     }
+
+    /** Wie ScanViewModel: unsicherer Treffer mit Name >= 0.85 wird live als Vorschlag gezeigt. */
+    private fun MatchResult.liveSuggestion() = best?.takeIf { !confident && it.nameScore >= 0.85 }
+
+    @Test
+    fun platzhalterOhneKuerzelBleibtVorFremdemSet() {
+        // Shiny Star V Glurak-VMAX 308/190, Kuerzel nicht gelesen (Regelzeichen klebt an Nummer/Kuerzel, Punkt dazwischen).
+        // SV4a hat auch 190 Karten: dessen Glurak-ex 115/190 ist nur eine Vermutung und darf nicht vorbeiziehen
+        for (code in listOf("s4a D308/190 SSR", "s4aD 308/190", "s4a・D 308/190")) {
+            val r = matcher.match(lines("リザードン" to 48, "HP330" to 20, code to 12))
+            assertEquals(r.show(), "ja:S4a-308", r.best?.card?.id)
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            // als Auswahl bleibt Glurak-ex erhalten
+            assertTrue(r.show(), r.alternatives.any { it.card.id == "ja:SV4a-115" })
+        }
+        val vmax = matcher.match(lines("リザードンVMAX" to 48, "HP330" to 20, "s4a D308/190 SSR" to 12))
+        assertEquals(vmax.show(), "ja:S4a-308", vmax.best?.card?.id)
+        assertEquals(vmax.show(), null, vmax.liveSuggestion()?.card?.id)
+    }
+
+    @Test
+    fun platzhalterLaesstTypischeFehllesungDurch() {
+        // Eine Ziffer daneben (115 als 116 gelesen) bleibt der typische OCR-Fehler: Glurak-ex vor Platzhalter S4a-116
+        val r = matcher.match(lines("リザードン" to 48, "HP330" to 20, "116/190" to 12))
+        assertEquals(r.show(), "ja:SV4a-115", r.best?.card?.id)
+        // Mit exakt gelesenem Namen ebenso
+        val ex = matcher.match(lines("リザードンex" to 48, "HP330" to 20, "308/190" to 12))
+        assertEquals(ex.show(), "リザードンex", ex.best?.card?.name)
+        // Kuerzel "sv4a" gelesen: der Platzhalter S4a-308 passt nicht dazu und haelt Glurak-ex nicht auf
+        val sv = matcher.match(lines("リザードン" to 48, "HP330" to 20, "G sv4a 308/190" to 12))
+        assertEquals(sv.show(), "リザードンex", sv.best?.card?.name)
+        assertEquals(sv.show(), "ja:SV4a", sv.best?.card?.setId)
+    }
+
+    @Test
+    fun enthaltenerNameEinesAnderenPokemonGewinntNicht() {
+        // XY2 Glurak-EX 011/080 (Platzhalter ohne Namen, kein Kuerzel auf XY-Karten). "リザード" (Glutexo, M2-012)
+        // steckt in "リザードンEX", ist aber ein anderes Pokemon: weder bester Treffer noch Live-Vorschlag
+        for (hp in listOf(emptyList(), listOf("HP180" to 20))) {
+            val r = matcher.match(lines("リザードンEX" to 48, *hp.toTypedArray(), "011/080" to 12))
+            val all = listOfNotNull(r.best) + r.alternatives
+            assertTrue(r.show(), all.none { it.card.name == "リザード" })
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            assertTrue(r.show(), r.best!!.card.isPlaceholder)
+            assertTrue(r.show(), all.any { it.card.id == "ja:XY2-011" })
+            // den gelesenen Namen gibt es im Katalog: diese Karten erscheinen zumindest als Auswahl
+            assertTrue(r.show(), all.any { it.card.name == "リザードンex" })
+        }
+        // Nummer der Glutexo-Karte selbst gelesen (012/080, auch XY2 Glurak-EX): nicht sicher, also kein automatisches
+        // Hinzufuegen, und Glutexo steht auch nicht vor den Platzhaltern mit derselben Nummer
+        for (hp in listOf(emptyList(), listOf("HP180" to 20))) {
+            val g = matcher.match(lines("リザードンEX" to 48, *hp.toTypedArray(), "012/080" to 12))
+            assertFalse(g.show(), g.confident)
+            assertEquals(g.show(), null, g.liveSuggestion()?.card?.id)
+            assertTrue(g.show(), g.best!!.card.isPlaceholder)
+            assertTrue(g.show(), (g.alternatives + g.best!!).any { it.card.id == "ja:XY2-012" })
+        }
+    }
+
+    @Test
+    fun platzhalterSchlaegtNamenOhneDessenLogo() {
+        // S1a Liberlo-VMAX 017/070 (HP320) und Liberlo-V 016/070 (HP210): S1a hat keine Kartenliste, "エースバーンVMAX"
+        // und "エースバーンV" gibt es im Katalog nicht. Das Logo in der Zeile widerspricht trotzdem dem einfachen
+        // Liberlo S6H-017 (gleiche Gesamtzahl 70): weder sicher noch Live-Vorschlag noch bester Treffer
+        val cases = listOf(
+            listOf("エースバーンVMAX" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX" to 48, "HP320" to 20, "s1aD 017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX" to 48, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンV" to 48, "HP210" to 20, "016/070" to 12) to "ja:S1a-016",
+            listOf("エースバーンV HP210" to 48, "016/070" to 12) to "ja:S1a-016",
+            // XY3 Skaraborn-EX 001/096 gegen neo1 Skaraborn (96 Karten)
+            listOf("ヘラクロスEX" to 48, "HP180" to 20, "001/096" to 12) to "ja:XY3-001",
+            // Logo nicht am Zeilenende: KP-Zahl ohne lesbares "HP", "HP" als "H" gelesen, Logo davor wiederholt
+            listOf("エースバーンVMAX 320" to 48, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX H320" to 48, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMAX320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("VMAX エースバーンVMAX 320" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("ヘラクロスEX 180" to 48, "001/096" to 12) to "ja:XY3-001",
+            // "HP" als "H" gelesen, die Zahl in einem eigenen Feld: "vmaxh" ist weiter das VMAX-Logo
+            listOf("エースバーンVMAXH" to 48, "320" to 20, "017/070" to 12) to "ja:S1a-017",
+            // Logo unvollstaendig gelesen
+            listOf("エースバーンVAX" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+            listOf("エースバーンVMA" to 48, "HP320" to 20, "017/070" to 12) to "ja:S1a-017",
+        )
+        for ((l, id) in cases) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            assertTrue(r.show(), r.best!!.card.isPlaceholder)
+            assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == id })
+        }
+        // Glurak-VMAX 002/100 (S3/S4 ohne Kartenliste): Glurak-V aus S9 (auch 100 Karten) ist nur eine Vermutung
+        val v = matcher.match(lines("リザードンVMAX" to 48, "HP330" to 20, "002/100" to 12))
+        assertTrue(v.show(), v.best!!.card.isPlaceholder)
+        assertEquals(v.show(), null, v.liveSuggestion()?.card?.id)
+        // Logo in eigener Zeile oder gar nicht gelesen: die KP (320) passen nicht zu Liberlo S6H-017 (170), wohl aber
+        // zum Platzhalter mit derselben Nummer. Liberlo darf vorne stehen, aber nicht sicher sein
+        for (l in listOf(
+            listOf("エースバーン" to 48, "VMAX" to 20, "HP320" to 20, "017/070" to 12),
+            listOf("エースバーン" to 48, "HP320" to 20, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident)
+            assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == "ja:S1a-017" })
+        }
+        // Gegenprobe: ohne Logo bleibt das einfache Liberlo sicher, auch mit KP ohne "HP" in der Namenszeile
+        for (l in listOf(
+            listOf("エースバーン" to 48, "HP170" to 20, "017/070" to 12),
+            listOf("エースバーン 170" to 48, "017/070" to 12),
+            listOf("エースバーン HP170" to 48, "017/070" to 12),
+        )) {
+            val plain = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(plain.show(), "ja:S6H-017", plain.best?.card?.id)
+            assertTrue(plain.show(), plain.confident)
+        }
+    }
+
+    @Test
+    fun vmaxMitAlsVGelesenemLogoBleibtSicher() {
+        // Pikachu-VMAX S8b 046/184 (KP 310), Logo nur als "V" gelesen: "ピカチュウV" ist hier das unvollstaendige Logo
+        // der eigenen Karte, kein Widerspruch. Pikachu-V 045/184 (KP 190) daneben zieht nicht vorbei
+        for (l in listOf(
+            listOf("ピカチュウV" to 48, "HP310" to 20, "046/184" to 12),
+            listOf("ピカチュウV HP310" to 48, "S8b 046/184" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S8b-046", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: KP der V-Karte gelesen, dann ist eher die Ziffer falsch gelesen
+        val v = matcher.match(lines("ピカチュウV" to 48, "HP190" to 20, "046/184" to 12))
+        assertFalse(v.show(), v.confident && v.best?.card?.id == "ja:S8b-046")
+    }
+
+    @Test
+    fun eigenesLogoMitStoerbuchstabeBleibtSicher() {
+        // "HP" als "H" gelesen, die Zahl in einem eigenen Feld oder mit O statt 0: "ヒカチュウvmaxh" ist das eigene
+        // VMAX-Logo mit einem Lesefehler, kein anderes Logo. Weder Mew-VMAX (S8b-280) noch ein Platzhalter zieht vorbei
+        for (l in listOf(
+            listOf("ピカチュウVMAXH" to 48, "310" to 20, "046/184" to 12),
+            listOf("ピカチュウVMAX H31O" to 48, "046/184" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S8b-046", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+    }
+
+    @Test
+    fun gelesenesKuerzelDesPlatzhaltersWidersprichtAnderemSet() {
+        // S1a Liberlo-VMAX 017/070 und Liberlo-V 016/070 (S1a ohne Kartenliste), Logo nicht oder in eigener Zeile
+        // gelesen. Das Kuerzel "S1a" passt zum Platzhalter, nicht zum einfachen Liberlo S6H-017 (gleiche Gesamtzahl):
+        // der Platzhalter steht vorne, Liberlo bleibt nur Auswahl
+        for ((l, id) in listOf(
+            listOf("エースバーン" to 48, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "VMAX" to 20, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "HP320" to 20, "D S1a 017/070 RRR" to 12) to "ja:S1a-017",
+            listOf("エースバーン" to 48, "S1a 016/070" to 12) to "ja:S1a-016",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertFalse(r.show(), r.confident)
+            assertEquals(r.show(), null, r.liveSuggestion()?.card?.id)
+            assertTrue(r.show(), r.alternatives.any { it.card.id == "ja:S6H-017" })
+        }
+        // Ohne Kuerzel, das Logo in eigener Zeile: es passt nicht zu Liberlo, wohl aber zum Platzhalter. Nicht sicher
+        val logo = matcher.match(lines("エースバーン" to 48, "VMAX" to 20, "017/070" to 12))
+        assertFalse(logo.show(), logo.confident)
+        assertTrue(logo.show(), (logo.alternatives + logo.best!!).any { it.card.id == "ja:S1a-017" })
+        // Gegenprobe: Kuerzel S6H gelesen, oder nichts, was Liberlo widerspricht: sicher
+        for (l in listOf(
+            listOf("エースバーン" to 48, "D S6H 017/070 R" to 12),
+            listOf("エースバーン" to 48, "HP170" to 20, "S6H 017/070" to 12),
+            listOf("エースバーン" to 48, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), "ja:S6H-017", r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+    }
+
+    @Test
+    fun nurExaktGelesenerNameZiehtAmPlatzhalterVorbei() {
+        // Exakt gelesener Name, auch mit KP in derselben Zeile: Glurak-ex trotz anderer Nummer vor dem Platzhalter
+        val ex = matcher.match(lines("リザードンex HP330" to 48, "308/190" to 12))
+        assertEquals(ex.show(), "リザードンex", ex.best?.card?.name)
+        // "リザードンex" steckt nur in der Zeile; der Rest ("M") kann zum unbekannten Namen des Platzhalters gehoeren
+        val mega = matcher.match(lines("Mリザードンex" to 48, "HP330" to 20, "308/190" to 12))
+        assertEquals(mega.show(), "ja:S4a-308", mega.best?.card?.id)
+        assertEquals(mega.show(), null, mega.liveSuggestion()?.card?.id)
+    }
+
+    @Test
+    fun nurNameOhneEnthalteneVorstufe() {
+        // Ohne Nummer, KP der Glutexo-Karten (90) gelesen: "リザードンEX" ist trotzdem Glurak-ex, nicht Glutexo
+        val r = matcher.match(lines("リザードンEX" to 48, "HP90" to 20))
+        assertEquals(r.show(), "リザードンex", r.best?.card?.name)
+        assertTrue(r.show(), (r.alternatives + r.best!!).none { it.card.name == "リザード" })
+    }
+
+    @Test
+    fun vorstufeMitFalscherZifferWirdNichtVorgeschlagen() {
+        // Zoroark 059/086, OCR liest 058 (= Zorua): "ゾロア" steckt in "ゾロアーク", ist aber die Vorstufe
+        val r = matcher.match(lines("ゾロアーク" to 48, "HP120" to 20, "058/086" to 12))
+        assertEquals(r.show(), "ja:SV11W-059", r.best?.card?.id)
+        assertFalse(r.show(), r.confident)
+        // Mewtu 086/128 als 087 gelesen (= Mew)
+        val m = matcher.match(lines("ミュウツー" to 48, "087/128" to 12))
+        assertFalse(m.show(), m.best?.card?.name == "ミュウ")
+        assertEquals(m.show(), null, m.liveSuggestion()?.takeIf { it.card.name == "ミュウ" })
+    }
+
+    @Test
+    fun kuerzelMitEinemLesefehlerVerdraengtGelesenenNamenNicht() {
+        // Mehrere Sets haben dieselbe Gesamtzahl wie ein Set ohne Kartenliste, dessen Kuerzel nur ein Zeichen anders
+        // ist (S8/S3, S9/S4, S10a/S10b, S10P/S10D, S7D/S7R, SV4a/S4a). Ein falsch gelesenes Zeichen im Kuerzel macht
+        // den Platzhalter nicht zum besten Treffer: Name, Nummer und Gesamtzahl passen, die Karte bleibt sicher
+        for ((l, id) in listOf(
+            listOf("ドロンチ" to 48, "S3 E 050/100" to 12) to "ja:S8-050",
+            listOf("ドロンチ HP90" to 48, "S3 E 050/100" to 12) to "ja:S8-050",
+            listOf("タマタマ" to 48, "S4 F 001/100" to 12) to "ja:S9-001",
+            listOf("ヒスイ ゾロアーク" to 48, "S10b F 030/071" to 12) to "ja:S10a-030",
+            listOf("エムリット" to 48, "S10D F 030/067" to 12) to "ja:S10P-030",
+            listOf("スイクンV" to 48, "S7R E 001/067" to 12) to "ja:S7D-001",
+            listOf("シャリタツ" to 48, "S4a G 050/190" to 12) to "ja:SV4a-050",
+            listOf("ピカチュウ HP70" to 48, "S4a G 055/190" to 12) to "ja:SV4a-055",
+            listOf("リザードンex HP330" to 48, "S4a G 115/190" to 12) to "ja:SV4a-115",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: das Kuerzel S1a ist zwei Zeichen von S6H entfernt und widerspricht dem einfachen Liberlo weiter
+        // (siehe gelesenesKuerzelDesPlatzhaltersWidersprichtAnderemSet), auch gross geschrieben
+        val s1a = matcher.match(lines("エースバーン" to 48, "S1A 017/070" to 12))
+        assertEquals(s1a.show(), "ja:S1a-017", s1a.best?.card?.id)
+        assertFalse(s1a.show(), s1a.confident)
+    }
+
+    @Test
+    fun einzelneFalschGeleseneKpZifferBleibtSicher() {
+        // Viele Karten teilen Nummer und Gesamtzahl mit einem Platzhalter (SV4a/S4a, S9/S4, S6H/S1a). Eine falsch
+        // gelesene Ziffer der KP ("HP80" statt 90, "HP180" statt 130) ist der typische OCR-Fehler und kein Hinweis auf
+        // die Logo-Form des Platzhalters: die Karte bleibt sicher
+        for ((l, id) in listOf(
+            listOf("リザード HP80" to 48, "026/190" to 12) to "ja:SV4a-026",
+            listOf("リザード" to 48, "HP80" to 20, "026/190" to 12) to "ja:SV4a-026",
+            listOf("ミュウex HP160" to 48, "076/190" to 12) to "ja:SV4a-076",
+            listOf("ラプラス HP180" to 48, "022/100" to 12) to "ja:S9-022",
+            listOf("ラプラス" to 48, "HP180" to 20, "022/100" to 12) to "ja:S9-022",
+            listOf("キノガッサ HP170" to 48, "004/100" to 12) to "ja:S9-004",
+            listOf("エースバーン HP120" to 48, "017/070" to 12) to "ja:S6H-017",
+            listOf("エースバーン" to 48, "HP180" to 20, "017/070" to 12) to "ja:S6H-017",
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertEquals(r.show(), id, r.best?.card?.id)
+            assertTrue(r.show(), r.confident)
+        }
+        // Gegenprobe: KP der Logo-Form (S1a Liberlo-VMAX KP 320 statt Liberlo KP 170), oder nur eine Ziffer anders,
+        // aber 100 KP mehr: nicht sicher, der Platzhalter bleibt in der Auswahl
+        for (l in listOf(
+            listOf("エースバーン HP320" to 48, "017/070" to 12),
+            listOf("エースバーン" to 48, "HP270" to 20, "017/070" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident)
+            assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == "ja:S1a-017" })
+        }
+    }
+
+    @Test
+    fun vorstufeMitFalscherZifferMachtEntwicklungNichtSicher() {
+        // "ブーバー" (Magmar) exakt gelesen, eine Ziffer der Nummer falsch: die Nummer gehoert zu "ブーバーン" (Magmortar).
+        // "ン" ist kein Logo, das die OCR uebersehen haette – die Entwicklung darf nicht sicher sein
+        for (l in listOf(
+            listOf("ブーバー" to 48, "017/172" to 12),
+            listOf("ブーバー" to 48, "S9 017/100" to 12),
+            listOf("ブーバー" to 48, "014/100" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident && r.best?.card?.name != "ブーバー")
+        }
+        // Gegenprobe: mit richtiger Nummer bleibt Magmar sicher
+        val ok = matcher.match(lines("ブーバー" to 48, "016/172" to 12))
+        assertEquals(ok.show(), "ja:S12a-016", ok.best?.card?.id)
+        assertTrue(ok.show(), ok.confident)
+    }
 }
