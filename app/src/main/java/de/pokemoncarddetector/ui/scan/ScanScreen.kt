@@ -113,6 +113,7 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
@@ -265,7 +266,9 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
             status = cameraError ?: state.status,
             showStatus = detection == null,
             detected = detection?.confident == true,
-            busy = state.busy || !cameraReady,
+            // Kamera startet noch -> Ladeanzeige; Kamera-Fehler -> Ausloeser deaktiviert (Galerie geht weiter)
+            busy = state.busy || (!cameraReady && cameraError == null),
+            shutterEnabled = cameraError == null,
             hasFlash = hasPermission && cameraReady && controller.cameraInfo?.hasFlashUnit() == true,
             torchOn = torchOn,
             onFrame = { vm.frame = it },
@@ -397,6 +400,7 @@ internal fun ScanLayout(
     showStatus: Boolean,
     detected: Boolean,
     busy: Boolean,
+    shutterEnabled: Boolean,
     hasFlash: Boolean,
     torchOn: Boolean,
     onFrame: (FrameGeometry) -> Unit,
@@ -449,6 +453,7 @@ internal fun ScanLayout(
                 StatusLine(status = status, visible = showStatus, detected = detected)
                 ScanBottomBar(
                     busy = busy,
+                    shutterEnabled = shutterEnabled,
                     hasFlash = hasFlash,
                     torchOn = torchOn,
                     onGallery = onGallery,
@@ -612,6 +617,7 @@ private fun StatusLine(status: String, visible: Boolean, detected: Boolean) {
 @Composable
 private fun ScanBottomBar(
     busy: Boolean,
+    shutterEnabled: Boolean,
     hasFlash: Boolean,
     torchOn: Boolean,
     onGallery: () -> Unit,
@@ -628,7 +634,7 @@ private fun ScanBottomBar(
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             SideButton(Icons.Default.PhotoLibrary, label = "Galerie", description = "Foto aus der Galerie wählen", checked = false, onClick = onGallery)
         }
-        ShutterButton(busy = busy, onClick = onShutter)
+        ShutterButton(busy = busy, enabled = shutterEnabled, onClick = onShutter)
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (hasFlash) {
                 SideButton(
@@ -673,13 +679,14 @@ private fun SideButton(icon: ImageVector, label: String, description: String, ch
 }
 
 @Composable
-private fun ShutterButton(busy: Boolean, onClick: () -> Unit) {
+private fun ShutterButton(busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(76.dp)
+            .alpha(if (enabled) 1f else 0.4f)
             .clip(CircleShape)
             .border(4.dp, Color.White, CircleShape)
-            .clickable(enabled = !busy, role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled && !busy, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = "Foto aufnehmen und erkennen" }
             .padding(8.dp),
         contentAlignment = Alignment.Center,
