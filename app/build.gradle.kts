@@ -14,8 +14,8 @@ android {
         applicationId = "de.pokemoncarddetector"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.0.1"
+        versionCode = 4
+        versionName = "2.0.2"
         vectorDrawables { useSupportLibrary = true }
         // Nur Handy-Prozessoren (ARM) – halbiert die APK-Groesse (ML-Kit-Bibliotheken)
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
