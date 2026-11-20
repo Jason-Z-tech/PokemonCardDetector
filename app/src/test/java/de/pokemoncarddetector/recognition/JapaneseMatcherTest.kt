@@ -476,4 +476,22 @@ class JapaneseMatcherTest {
             assertTrue(r.show(), (r.alternatives + r.best!!).any { it.card.id == "ja:S1a-017" })
         }
     }
+
+    @Test
+    fun vorstufeMitFalscherZifferMachtEntwicklungNichtSicher() {
+        // "ブーバー" (Magmar) exakt gelesen, eine Ziffer der Nummer falsch: die Nummer gehoert zu "ブーバーン" (Magmortar).
+        // "ン" ist kein Logo, das die OCR uebersehen haette – die Entwicklung darf nicht sicher sein
+        for (l in listOf(
+            listOf("ブーバー" to 48, "017/172" to 12),
+            listOf("ブーバー" to 48, "S9 017/100" to 12),
+            listOf("ブーバー" to 48, "014/100" to 12),
+        )) {
+            val r = matcher.match(lines(*l.toTypedArray()))
+            assertFalse(r.show(), r.confident && r.best?.card?.name != "ブーバー")
+        }
+        // Gegenprobe: mit richtiger Nummer bleibt Magmar sicher
+        val ok = matcher.match(lines("ブーバー" to 48, "016/172" to 12))
+        assertEquals(ok.show(), "ja:S12a-016", ok.best?.card?.id)
+        assertTrue(ok.show(), ok.confident)
+    }
 }

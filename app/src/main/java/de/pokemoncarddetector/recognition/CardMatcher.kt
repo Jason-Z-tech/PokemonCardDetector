@@ -273,9 +273,14 @@ class CardMatcher(private val index: CatalogIndex) {
                     // gelesen). Ist der Nummern-Treffer widersprochen, zaehlt dafuer sein Wert ohne Widerspruch,
                     // ausser der Name ist exakt gelesen ("Mewtu KP 130" mit der Nummer von Mew-ex)
                     if (ns < 0.8 || ns <= bestNumberName + 0.02) continue
-                    if (ns < 0.95 && ns <= bestNumberRaw + 0.02) continue
+                    // Ausser die Karte ist ein widersprochener Nummern-Treffer mit Logo ("Sylveon V" neben "Sylveon" 15/30)
+                    if (ns < 0.95 && ns <= bestNumberRaw + 0.02 &&
+                        !(nameInLine(parsed, card) && candidates.values.any { it.nameScore <= NEUTRAL && logoSuffix(it.card, card) })) continue
                     // "Olangaar" passt auch zu "Olangaar VMAX" (Logo wird oft separat gelesen) – kein Widerspruch
-                    if (bestNumberCandidate != null && bestNumberName >= 0.8 && logoUnread(card, bestNumberCandidate.card, parsed)) continue
+                    // Ausser die Zeile ist genau der kuerzere Name und der laengere verlaengert ihn nicht um ein Logo:
+                    // "ブーバー" (Magmar) mit der Nummer von "ブーバーン" (Magmortar)
+                    if (bestNumberCandidate != null && bestNumberName >= 0.8 && logoUnread(card, bestNumberCandidate.card, parsed) &&
+                        !(readExactly(parsed, card) && rightExtension(card, bestNumberCandidate.card))) continue
                     val c = score(card, set, parsed, ns, numberMatched = false, totalRead(set, card), set.id in codeSetIds)
                     offer(if (closeNumber(card)) c.copy(score = c.score + W_CLOSE_NUMBER) else c)
                 }
@@ -418,6 +423,10 @@ class CardMatcher(private val index: CatalogIndex) {
         contained.contradiction = true
         return NEUTRAL
     }
+
+    /** Der Name der Karte steht woertlich in einer Namenszeile (nicht nur unscharf aehnlich). */
+    private fun nameInLine(parsed: ParsedCardText, card: IndexCard): Boolean =
+        parsed.nameLines.any { line -> listOf(card.nameNorm, card.nameEnNorm).any { it.length >= 3 && line.contains(it) } }
 
     private fun occurrences(s: String, part: String): Sequence<Int> =
         generateSequence(s.indexOf(part).takeIf { it >= 0 }) { i -> s.indexOf(part, i + 1).takeIf { it >= 0 } }
@@ -573,7 +582,25 @@ class CardMatcher(private val index: CatalogIndex) {
             .map { it.key to index.cardsByName[it.key].orEmpty() }
     }
 
-    /** Ein Name ist im anderen enthalten ("Glurak EX" / "M-Glurak EX", "Olangaar" / "Olangaar VMAX"). */
+    /** [longer] ist [shorter] plus ein (Teil-)Logo am Ende: "Olangaar" / "Olangaar VMAX", "Pikachu V" / "Pikachu VMAX". */
+    private fun logoSuffix(shorter: IndexCard, longer: IndexCard): Boolean {
+        return logoSuffixOf(shorter.nameNorm, longer.nameNorm) || logoSuffixOf(shorter.nameEnNorm, longer.nameEnNorm)
+    }
+
+    /** Der Rest von [y] hinter [x] ist ein Logo oder dessen Ende, dessen Anfang [x] schon hat ("pikachuv" + "max"). */
+    private fun logoSuffixOf(x: String, y: String): Boolean = x.length >= 3 && y.length > x.length && y.startsWith(x) &&
+        IndexCard.LOGOS_NORM.any { l -> l.endsWith(y.substring(x.length)) && x.endsWith(l.dropLast(y.length - x.length)) }
+
+    /** [longer] verlaengert [shorter] nach rechts, aber nicht um ein Logo: "ブーバー" / "ブーバーン", "Mew" / "Mewtu". */
+    private fun rightExtension(shorter: IndexCard, longer: IndexCard): Boolean {
+        fun n(x: String, y: String) = x.length >= 3 && y.length > x.length && y.startsWith(x)
+        // Delta-Spezies und SP-Kuerzel sind wie Logos kleine Grafiken, die OCR oft nicht liest ("Pikachu δ", "Dialga G")
+        fun one(x: String, y: String) = n(x, y) && !logoSuffixOf(x, y) && y.substring(x.length) !in SYMBOL_SUFFIXES
+        return one(shorter.nameNorm, longer.nameNorm) || one(shorter.nameEnNorm, longer.nameEnNorm)
+    }
+
+    private val SYMBOL_SUFFIXES = setOf("δ", "exδ", "g", "gl", "c", "4", "e4", "fb")
+
     /**
      * true, wenn der Name von [shorter] im Namen von [longer] steckt ("Olangaar" in "Olangaar VMAX").
      * Dann hat die OCR vermutlich nur das Logo (VMAX, V, EX ...) nicht gelesen – kein Grund fuer Zweifel.

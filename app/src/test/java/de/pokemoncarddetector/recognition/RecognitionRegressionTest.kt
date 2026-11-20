@@ -465,6 +465,16 @@ class RecognitionRegressionTest {
     }
 
     @Test
+    fun widersprochenerNummernTrefferMitLogoVerdraengtNichtDenGelesenenNamen() {
+        // "TG15/30" wird auch als 15/30 gelesen und trifft das Trainer-Kit-Feelinara (ohne V). Das ist zu Recht
+        // widersprochen, aber "Sylveon V" steht woertlich in der Zeile: Feelinara-VMAX TG15 (Nummer passt, Name nicht)
+        // darf deshalb nicht sicher sein, Sylveon V TG14 bleibt in der Auswahl
+        val r = matcher.match(lines("BASIC" to 14, "Sylveon V HP 200" to 48, "TG15/30" to 12))
+        assertFalse(r.show(), r.confident && r.best?.card?.id == "swsh9tg-TG15")
+        assertTrue(r.show(), (r.alternatives + listOfNotNull(r.best)).any { it.card.id == "swsh9tg-TG14" })
+    }
+
+    @Test
     fun fliesstextMitLaengeremNamenBleibtHinweis() {
         // Name unlesbar; die Faehigkeit von Simsala-EX erwaehnt M-Simsala-EX. Das ist Fliesstext, keine Namenszeile:
         // der darin enthaltene Name "Simsala EX" zaehlt weiter
