@@ -30,7 +30,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,7 +50,6 @@ import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
@@ -62,11 +60,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LargeFloatingActionButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -93,11 +88,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -110,6 +102,35 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.IntSize
 import de.pokemoncarddetector.data.AppSettings
 import de.pokemoncarddetector.data.Variants
 import de.pokemoncarddetector.data.db.CardItem
@@ -234,85 +255,39 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
             .background(Color.Black),
     ) {
         if (hasPermission) {
-            CameraPreview(vm, controller, detected = state.detection?.confident == true, onError = { cameraError = it })
-        } else {
-            NoPermission(
-                permanentlyDenied = permanentlyDenied,
-                onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                onOpenSettings = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
-                    )
-                },
-            )
+            CameraPreview(vm, controller, onError = { cameraError = it })
         }
-
-        // Obere Leiste
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Karte scannen",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                RoundIcon(onClick = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = "Foto aus Galerie")
-                }
-                if (hasPermission && cameraReady && controller.cameraInfo?.hasFlashUnit() == true) {
-                    RoundIcon(onClick = { runCatching { controller.enableTorch(!torchOn) } }) {
-                        Icon(
-                            if (torchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                            contentDescription = if (torchOn) "Licht ausschalten" else "Licht einschalten",
+        val detection = state.detection
+        ScanLayout(
+            hasPermission = hasPermission,
+            autoAdd = settings.autoAdd,
+            japanese = settings.scanJapanese,
+            status = cameraError ?: state.status,
+            showStatus = detection == null,
+            detected = detection?.confident == true,
+            busy = state.busy || !cameraReady,
+            hasFlash = hasPermission && cameraReady && controller.cameraInfo?.hasFlashUnit() == true,
+            torchOn = torchOn,
+            onFrame = { vm.frame = it },
+            onToggleAutoAdd = { vm.setAutoAdd(!settings.autoAdd) },
+            onToggleJapanese = { vm.setJapanese(!settings.scanJapanese) },
+            onGallery = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onTorch = { runCatching { controller.enableTorch(!torchOn) } },
+            onShutter = takePhoto,
+            noPermission = {
+                NoPermission(
+                    permanentlyDenied = permanentlyDenied,
+                    onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    onOpenSettings = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
                         )
-                    }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                AutoAddChip(settings.autoAdd, onToggle = { vm.setAutoAdd(!settings.autoAdd) })
-                FilterChip(
-                    selected = settings.scanJapanese,
-                    onClick = { vm.setJapanese(!settings.scanJapanese) },
-                    label = { Text(if (settings.scanJapanese) "Japanische Karten" else "Japanisch", maxLines = 1) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color.Black.copy(alpha = 0.55f),
-                        labelColor = Color.White,
-                    ),
+                    },
+                    onGallery = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 )
-            }
-            if (hasPermission) {
-                Surface(color = Color.Black.copy(alpha = 0.55f), contentColor = Color.White, shape = RoundedCornerShape(50)) {
-                    Text(
-                        cameraError ?: state.status,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
-                }
-            }
-        }
-
-        // Untere Leiste: Ergebnis + Ausloeser
-        Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            },
         ) {
             SnackbarHost(snackbar)
-            val detection = state.detection
             if (detection != null) {
                 DetectionCard(
                     detection = detection,
@@ -324,10 +299,6 @@ fun ScanScreen(onSearch: (String) -> Unit, onOpenSet: (String) -> Unit) {
                     onOpen = { openCard = detection.best.card.id },
                     onSearch = { onSearch(detection.best.card.nameEn.ifBlank { detection.best.card.name }) },
                 )
-                Spacer(Modifier.height(10.dp))
-            }
-            if (hasPermission) {
-                ShutterButton(busy = state.busy || !cameraReady, onClick = takePhoto)
             }
         }
     }
@@ -377,7 +348,7 @@ private fun createController(
 }
 
 @Composable
-private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraController, detected: Boolean, onError: (String) -> Unit) {
+private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraController, onError: (String) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
 
     DisposableEffect(lifecycleOwner) {
@@ -397,94 +368,334 @@ private fun CameraPreview(vm: ScanViewModel, controller: LifecycleCameraControll
         vm.recognizer.fixedRotationDegrees = runCatching { controller.cameraInfo?.getSensorRotationDegrees(displayRotation) }.getOrNull()
     }
 
+    AndroidView(
+        factory = { ctx ->
+            PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                this.controller = controller
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+/**
+ * Bedienoberflaeche ueber der Kameravorschau: Schalter oben, darunter der Rahmen im Kartenformat im
+ * freien Platz, die Statuszeile direkt unter dem Rahmen und unten Galerie / Ausloeser / Licht.
+ * Nichts davon liegt im Rahmen. [onFrame] meldet den Rahmen in Pixeln relativ zu dieser Flaeche
+ * (= Groesse der Kameravorschau), damit die Erkennung nur Text im Rahmen auswertet.
+ * [overlay] (Ergebnis-Karte, Snackbar) liegt unten ueber der Statuszeile, direkt ueber den Knoepfen.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ScanLayout(
+    hasPermission: Boolean,
+    autoAdd: Boolean,
+    japanese: Boolean,
+    status: String,
+    showStatus: Boolean,
+    detected: Boolean,
+    busy: Boolean,
+    hasFlash: Boolean,
+    torchOn: Boolean,
+    onFrame: (FrameGeometry) -> Unit,
+    onToggleAutoAdd: () -> Unit,
+    onToggleJapanese: () -> Unit,
+    onGallery: () -> Unit,
+    onTorch: () -> Unit,
+    onShutter: () -> Unit,
+    noPermission: @Composable () -> Unit,
+    overlay: @Composable ColumnScope.() -> Unit,
+) {
     val density = LocalDensity.current
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val w = with(density) { maxWidth.toPx() }
-        val h = with(density) { maxHeight.toPx() }
-        // Rahmen im Kartenformat: 78 % Breite, max. 58 % Hoehe, etwas oberhalb der Mitte
-        var fw = w * 0.78f
-        var fh = fw / CARD_ASPECT
-        if (fh > h * 0.58f) {
-            fh = h * 0.58f; fw = fh * CARD_ASPECT
+    var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    var slot by remember { mutableStateOf<Rect?>(null) }
+    var bottomBarHeight by remember { mutableIntStateOf(0) }
+    val frame = slot?.let { with(density) { fitCardFrame(it, marginX = 20.dp.toPx(), marginY = 8.dp.toPx()) } }
+    val currentOnFrame by rememberUpdatedState(onFrame)
+    LaunchedEffect(frame, rootSize) {
+        if (frame != null && rootSize != IntSize.Zero) {
+            currentOnFrame(FrameGeometry(rootSize.width, rootSize.height, frame.left, frame.top, frame.right, frame.bottom))
         }
-        val left = (w - fw) / 2f
-        val top = (h - fh) * 0.38f
-        val frameRect = Rect(left, top, left + fw, top + fh)
-        LaunchedEffect(w, h) {
-            vm.frame = FrameGeometry(w.toInt(), h.toInt(), frameRect.left, frameRect.top, frameRect.right, frameRect.bottom)
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { rootSize = it },
+    ) {
+        if (hasPermission && frame != null) FrameOverlay(frame, detected)
+
+        Column(Modifier.fillMaxSize()) {
+            ScanToggles(
+                autoAdd = autoAdd,
+                japanese = japanese,
+                onToggleAutoAdd = onToggleAutoAdd,
+                onToggleJapanese = onToggleJapanese,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            if (hasPermission) {
+                // Freier Platz fuer den Rahmen (die Spalte beginnt bei 0,0 der Flaeche)
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .onGloballyPositioned { slot = it.boundsInParent() },
+                )
+                StatusLine(status = status, visible = showStatus, detected = detected)
+                ScanBottomBar(
+                    busy = busy,
+                    hasFlash = hasFlash,
+                    torchOn = torchOn,
+                    onGallery = onGallery,
+                    onTorch = onTorch,
+                    onShutter = onShutter,
+                    modifier = Modifier.onSizeChanged { bottomBarHeight = it.height },
+                )
+            } else {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                ) { noPermission() }
+            }
         }
 
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                    this.controller = controller
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        Canvas(
+        Column(
             Modifier
-                .fillMaxSize()
-                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen),
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = with(density) { (if (hasPermission) bottomBarHeight else 0).toDp() })
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            content = overlay,
+        )
+    }
+}
+
+/** Groesster Rahmen im Kartenformat, der mit Rand in [slot] passt, mittig; null wenn kein Platz. */
+internal fun fitCardFrame(slot: Rect, marginX: Float, marginY: Float): Rect? {
+    val maxW = slot.width - 2 * marginX
+    val maxH = slot.height - 2 * marginY
+    if (maxW <= 0f || maxH <= 0f) return null
+    val fw = minOf(maxW, maxH * CARD_ASPECT)
+    val fh = fw / CARD_ASPECT
+    val left = slot.left + (slot.width - fw) / 2f
+    val top = slot.top + (slot.height - fh) / 2f
+    return Rect(left, top, left + fw, top + fh)
+}
+
+private val ScanGreen = Color(0xFF4CAF50)
+private val TextShadow = Shadow(Color.Black.copy(alpha = 0.7f), offset = Offset(0f, 1f), blurRadius = 6f)
+
+@Composable
+private fun FrameOverlay(frame: Rect, detected: Boolean) {
+    val accent = if (detected) ScanGreen else Color.White
+    Canvas(Modifier.fillMaxSize()) {
+        val r = minOf(20.dp.toPx(), frame.width * 0.07f)
+        // Abdunkeln ausserhalb des Rahmens (Maske statt Ausstanzen): Bedienelemente bleiben auch vor hellem
+        // Hintergrund lesbar
+        val scrim = Path().apply {
+            fillType = PathFillType.EvenOdd
+            addRect(Rect(Offset.Zero, size))
+            addRoundRect(RoundRect(frame, CornerRadius(r)))
+        }
+        drawPath(scrim, Color.Black.copy(alpha = 0.6f))
+        drawRoundRect(accent.copy(alpha = 0.5f), frame.topLeft, frame.size, CornerRadius(r), style = Stroke(width = 1.5.dp.toPx()))
+        // Betonte Ecken
+        val len = minOf(40.dp.toPx(), frame.width / 4f)
+        val (l, t, rt, b) = listOf(frame.left, frame.top, frame.right, frame.bottom)
+        val path = Path().apply {
+            moveTo(l, t + len); lineTo(l, t + r)
+            arcTo(Rect(l, t, l + 2 * r, t + 2 * r), 180f, 90f, false); lineTo(l + len, t)
+            moveTo(rt - len, t); lineTo(rt - r, t)
+            arcTo(Rect(rt - 2 * r, t, rt, t + 2 * r), 270f, 90f, false); lineTo(rt, t + len)
+            moveTo(rt, b - len); lineTo(rt, b - r)
+            arcTo(Rect(rt - 2 * r, b - 2 * r, rt, b), 0f, 90f, false); lineTo(rt - len, b)
+            moveTo(l + len, b); lineTo(l + r, b)
+            arcTo(Rect(l, b - 2 * r, l + 2 * r, b), 90f, 90f, false); lineTo(l, b - len)
+        }
+        drawPath(path, accent, style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScanToggles(
+    autoAdd: Boolean,
+    japanese: Boolean,
+    onToggleAutoAdd: () -> Unit,
+    onToggleJapanese: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Bricht bei wenig Platz / grosser Schrift um, statt abgeschnitten zu werden
+    FlowRow(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ScanToggle("Auto-Hinzufügen", autoAdd, if (autoAdd) Icons.Default.Check else Icons.Default.AutoMode, onToggleAutoAdd)
+        ScanToggle("Japanisch", japanese, if (japanese) Icons.Default.Check else Icons.Default.Translate, onToggleJapanese)
+    }
+}
+
+@Composable
+private fun ScanToggle(label: String, checked: Boolean, icon: ImageVector, onToggle: () -> Unit) {
+    Surface(
+        checked = checked,
+        onCheckedChange = { onToggle() },
+        shape = RoundedCornerShape(50),
+        color = if (checked) Color.White else Color.Black.copy(alpha = 0.6f),
+        contentColor = if (checked) Color(0xFF1B1B1F) else Color.White,
+        border = if (checked) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+        modifier = Modifier.semantics { stateDescription = if (checked) "an" else "aus" },
+    ) {
+        Row(
+            Modifier
+                .heightIn(min = 40.dp)
+                .padding(start = 10.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            drawRect(Color.Black.copy(alpha = 0.45f))
-            val radius = CornerRadius(18.dp.toPx())
-            drawRoundRect(
-                color = Color.Transparent,
-                topLeft = Offset(frameRect.left, frameRect.top),
-                size = frameRect.size,
-                cornerRadius = radius,
-                blendMode = BlendMode.Clear,
-            )
-            drawRoundRect(
-                color = if (detected) Color(0xFF4CAF50) else Color.White,
-                topLeft = Offset(frameRect.left, frameRect.top),
-                size = frameRect.size,
-                cornerRadius = radius,
-                style = Stroke(width = 3.dp.toPx()),
-            )
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 2)
         }
     }
 }
 
 @Composable
-private fun RoundIcon(onClick: () -> Unit, content: @Composable () -> Unit) {
-    FilledIconButton(
-        onClick = onClick,
-        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.Black.copy(alpha = 0.55f), contentColor = Color.White),
-        modifier = Modifier.padding(start = 6.dp),
-    ) { content() }
+private fun StatusLine(status: String, visible: Boolean, detected: Boolean) {
+    val style = MaterialTheme.typography.titleSmall
+    // Bei sehr grosser Schrift drei Zeilen, damit auch laengere Hinweise nicht abgeschnitten werden
+    val lines = if (LocalDensity.current.fontScale >= 1.5f) 3 else 2
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        // Platz fuer alle Zeilen fest einplanen: der Rahmen springt nicht, wenn der Text wechselt
+        Text(
+            "",
+            style = style,
+            minLines = lines,
+            color = Color.Transparent,
+            modifier = Modifier
+                .padding(vertical = 10.dp)
+                .clearAndSetSemantics { },
+        )
+        if (visible) {
+            Surface(
+                color = if (detected) Color(0xFF2E7D32) else Color.Black.copy(alpha = 0.72f),
+                contentColor = Color.White,
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Text(
+                    status,
+                    style = style,
+                    textAlign = TextAlign.Center,
+                    maxLines = lines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+        }
+    }
 }
 
 @Composable
-private fun AutoAddChip(enabled: Boolean, onToggle: () -> Unit) {
-    FilterChip(
-        selected = enabled,
-        onClick = onToggle,
-        label = { Text(if (enabled) "Automatisch hinzufügen: an" else "Automatisch hinzufügen: aus", maxLines = 1) },
-        leadingIcon = { Icon(if (enabled) Icons.Default.Check else Icons.Default.AutoMode, null, Modifier.size(18.dp)) },
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = Color.Black.copy(alpha = 0.55f),
-            labelColor = Color.White,
-            iconColor = Color.White,
-        ),
-    )
+private fun ScanBottomBar(
+    busy: Boolean,
+    hasFlash: Boolean,
+    torchOn: Boolean,
+    onGallery: () -> Unit,
+    onTorch: () -> Unit,
+    onShutter: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            SideButton(Icons.Default.PhotoLibrary, label = "Galerie", description = "Foto aus der Galerie wählen", checked = false, onClick = onGallery)
+        }
+        ShutterButton(busy = busy, onClick = onShutter)
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            if (hasFlash) {
+                SideButton(
+                    if (torchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                    label = "Licht",
+                    description = if (torchOn) "Licht ausschalten" else "Licht einschalten",
+                    checked = torchOn,
+                    onClick = onTorch,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SideButton(icon: ImageVector, label: String, description: String, checked: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(48.dp)
+                .background(if (checked) Color.White else Color.Black.copy(alpha = 0.6f), CircleShape)
+                .border(1.dp, Color.White.copy(alpha = if (checked) 0f else 0.45f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = if (checked) Color(0xFF1B1B1F) else Color.White)
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium.copy(shadow = TextShadow),
+            color = Color.White,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
 }
 
 @Composable
 private fun ShutterButton(busy: Boolean, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        LargeFloatingActionButton(onClick = { if (!busy) onClick() }, shape = RoundedCornerShape(50)) {
-            if (busy) CircularProgressIndicator(Modifier.size(32.dp)) else Icon(Icons.Default.CameraAlt, contentDescription = "Foto aufnehmen und erkennen")
+    Box(
+        Modifier
+            .size(76.dp)
+            .clip(CircleShape)
+            .border(4.dp, Color.White, CircleShape)
+            .clickable(enabled = !busy, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "Foto aufnehmen und erkennen" }
+            .padding(8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(if (busy) Color.White.copy(alpha = 0.55f) else Color.White, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (busy) {
+                CircularProgressIndicator(Modifier.size(28.dp), color = Color(0xFF1B1B1F), strokeWidth = 3.dp)
+            } else {
+                Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color(0xFF1B1B1F), modifier = Modifier.size(30.dp))
+            }
         }
-        Text(
-            "Erkennt automatisch – oder Foto für schwierige Karten",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            modifier = Modifier.padding(top = 4.dp),
-        )
     }
 }
 
@@ -623,7 +834,7 @@ private fun CandidateRow(item: CardItem, settings: AppSettings, isBest: Boolean,
 }
 
 @Composable
-private fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit) =
+private fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit, onGallery: () -> Unit) =
     CompositionLocalProvider(LocalContentColor provides Color.White) {
         Column(
             Modifier
@@ -648,7 +859,11 @@ private fun NoPermission(permanentlyDenied: Boolean, onRequest: () -> Unit, onOp
             } else {
                 Button(onClick = onRequest) { Text("Kamera erlauben") }
             }
-            Spacer(Modifier.height(8.dp))
-            Text("Alternativ: Foto aus der Galerie (Symbol oben rechts)", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onGallery) {
+                Icon(Icons.Default.PhotoLibrary, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Foto aus der Galerie", color = Color.White)
+            }
         }
     }

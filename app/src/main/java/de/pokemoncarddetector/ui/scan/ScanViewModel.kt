@@ -159,7 +159,7 @@ class ScanViewModel(
             p.isEmpty -> "Halte eine Karte in den Rahmen"
             result.confident && result.best != null -> "Erkannt: ${result.best.card.name.ifBlank { "Nr. " + result.best.card.localId }}"
             p.numbers.isNotEmpty() -> "Nummer gelesen: ${p.numbers.first().raw} – suche Karte …"
-            else -> "Text erkannt – halte die Karte ruhig, Nummer unten gut sichtbar"
+            else -> "Karte ruhig halten – die Nummer unten muss lesbar sein"
         }
     }
 
